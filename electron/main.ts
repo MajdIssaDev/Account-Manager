@@ -66,8 +66,8 @@ const pidMisses = new Map<string, number>();
 let mainWindow: BrowserWindow | null = null;
 let loginWindow: BrowserWindow | null = null;
 
-const LAUNCH_JOB_TIMEOUT_MS = 75_000;
-const LAUNCH_GAP_MS = 2_500;
+const LAUNCH_JOB_TIMEOUT_MS = 90_000;
+const LAUNCH_GAP_MS = 1_500;
 const PID_MISS_LIMIT = 3;
 
 type LaunchJob = {

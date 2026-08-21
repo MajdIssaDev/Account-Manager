@@ -159,6 +159,7 @@ async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
+/** Kill installer processes only — never /T, or we also kill RobloxPlayerBeta parents. */
 async function killInstallersNow(): Promise<boolean> {
   let killed = false;
   for (const name of INSTALLER_NAMES) {
@@ -166,18 +167,20 @@ async function killInstallersNow(): Promise<boolean> {
     if (!pids.length) {
       continue;
     }
-    await execFileAsync("taskkill", ["/IM", name, "/T", "/F"]).catch(() => undefined);
-    killed = true;
+    for (const pid of pids) {
+      await execFileAsync("taskkill", ["/PID", String(pid), "/F"]).catch(() => undefined);
+      killed = true;
+    }
   }
   return killed;
 }
 
-async function waitUntilAppears(before: number[], timeoutMs = 25000): Promise<number> {
+async function waitUntilAppears(before: number[], timeoutMs = 30000): Promise<number> {
   const start = Date.now();
   let candidate: number | null = null;
   let seenAt = 0;
+  let installerKills = 0;
   while (Date.now() - start < timeoutMs) {
-    await killInstallersNow();
     const now = await listProcessPids(PLAYER);
     const fresh = now.filter((p) => !before.includes(p) && isPidAlive(p));
     if (fresh.length) {
@@ -185,36 +188,41 @@ async function waitUntilAppears(before: number[], timeoutMs = 25000): Promise<nu
       if (candidate !== pid) {
         candidate = pid;
         seenAt = Date.now();
-      } else if (Date.now() - seenAt >= 250) {
+      } else if (Date.now() - seenAt >= 400) {
         return pid;
       }
     } else {
       candidate = null;
+      // Only clear installers when no new player showed up yet.
+      if (Date.now() - start > 2500 && installerKills < 4) {
+        if (await killInstallersNow()) {
+          installerKills += 1;
+          releaseRobloxSingleton();
+        }
+      }
     }
-    await sleep(60);
+    await sleep(100);
   }
-  await killInstallersNow();
   throw new Error("Roblox did not start a new client.");
 }
 
 async function waitUntilStable(
   initial: number,
   before: number[],
-  holdMs = 2800,
-  timeoutMs = 28000,
+  holdMs = 3000,
+  timeoutMs = 35000,
 ): Promise<number> {
   const start = Date.now();
   let current = initial;
   let heldAt = Date.now();
   let missing = 0;
   while (Date.now() - start < timeoutMs) {
-    await killInstallersNow();
     const now = await listProcessPids(PLAYER);
     const fresh = now.filter((p) => !before.includes(p) && isPidAlive(p));
     if (!fresh.includes(current)) {
       if (!fresh.length) {
         missing += 1;
-        if (missing >= 4) {
+        if (missing >= 6) {
           throw new Error("The new client closed before it finished starting.");
         }
       } else {
@@ -227,9 +235,17 @@ async function waitUntilStable(
     } else {
       missing = 0;
     }
-    await sleep(100);
+    await sleep(120);
   }
   throw new Error("The new client closed before it finished starting.");
+}
+
+/** Keep closing ROBLOX_singleton on running clients until the next launch can start. */
+async function unlockUntilReady(rounds = 12): Promise<void> {
+  for (let i = 0; i < rounds; i++) {
+    releaseRobloxSingleton();
+    await sleep(80);
+  }
 }
 
 function unlockHelperPath(): string | null {
@@ -249,7 +265,6 @@ function unlockHelperPath(): string | null {
 let watcher: ChildProcess | null = null;
 let watchRefs = 0;
 let persistUnlock = false;
-let installerGuard: ReturnType<typeof setInterval> | null = null;
 
 function releaseRobloxSingleton(): void {
   const exe = unlockHelperPath();
@@ -257,27 +272,6 @@ function releaseRobloxSingleton(): void {
     return;
   }
   spawnSync(exe, [], { windowsHide: true, timeout: 4000, stdio: "ignore" });
-}
-
-function startInstallerGuard(): void {
-  if (installerGuard) {
-    return;
-  }
-  void killInstallersNow();
-  installerGuard = setInterval(() => {
-    void killInstallersNow();
-  }, 350);
-}
-
-function stopInstallerGuardIfIdle(): void {
-  if (persistUnlock || watchRefs > 0) {
-    return;
-  }
-  if (!installerGuard) {
-    return;
-  }
-  clearInterval(installerGuard);
-  installerGuard = null;
 }
 
 function startWatcher(): void {
@@ -324,13 +318,11 @@ function stopWatcherIfIdle(): void {
 export function beginSingletonWatch(): void {
   watchRefs += 1;
   startWatcher();
-  startInstallerGuard();
 }
 
 export function endSingletonWatch(): void {
   watchRefs = Math.max(0, watchRefs - 1);
   stopWatcherIfIdle();
-  stopInstallerGuardIfIdle();
 }
 
 /** Keep multi-client unlock alive while any managed client is running. */
@@ -338,19 +330,21 @@ export function setPersistentUnlock(enabled: boolean): void {
   persistUnlock = enabled;
   if (enabled) {
     startWatcher();
-    startInstallerGuard();
     releaseRobloxSingleton();
   } else {
     stopWatcherIfIdle();
-    stopInstallerGuardIfIdle();
   }
 }
 
+/** Called between queued launches: unlock existing clients, then wait. */
 export async function prepareNextLaunch(): Promise<void> {
   await killInstallersNow();
-  releaseRobloxSingleton();
-  await sleep(120);
-  releaseRobloxSingleton();
+  beginSingletonWatch();
+  try {
+    await unlockUntilReady(16);
+  } finally {
+    endSingletonWatch();
+  }
 }
 
 function spawnPlayer(exe: string, ticket: string): void {
@@ -386,42 +380,36 @@ export async function launchAccount(cookieEnc: string): Promise<number> {
   if (!unlockHelperPath()) {
     throw new Error("Cannot start clients: multi-client helper is missing. Rebuild the app.");
   }
+
   const cookie = decryptCookie(cookieEnc);
   const ticket = await createAuthenticationTicket(cookie);
+
+  // Clear leftover installers without touching RobloxPlayerBeta trees.
   await killInstallersNow();
+
   const before = await listProcessPids(PLAYER);
   beginSingletonWatch();
   try {
-    releaseRobloxSingleton();
-    await sleep(80);
-    releaseRobloxSingleton();
+    // Unlock any already-running clients so this spawn is allowed.
+    await unlockUntilReady(before.length > 0 ? 16 : 4);
     spawnPlayer(exe, ticket);
 
-    // If Roblox opens the installer instead of the client, kill it and launch the player again.
-    const appearDeadline = Date.now() + 12000;
-    let retried = 0;
-    while (Date.now() < appearDeadline) {
-      const fresh = (await listProcessPids(PLAYER)).filter((p) => !before.includes(p) && isPidAlive(p));
-      if (fresh.length) {
-        break;
-      }
-      if ((await killInstallersNow()) && retried < 3) {
-        releaseRobloxSingleton();
-        spawnPlayer(exe, ticket);
-        retried += 1;
-      }
-      await sleep(80);
-    }
-
     const appeared = await waitUntilAppears(before);
-    return await waitUntilStable(appeared, before);
+    const stable = await waitUntilStable(appeared, before);
+
+    // Make sure THIS new client's singleton is released before the queue starts the next one.
+    await unlockUntilReady(12);
+    if (!isPidAlive(stable)) {
+      throw new Error("The new client closed before it finished starting.");
+    }
+    return stable;
   } finally {
     endSingletonWatch();
   }
 }
 
 export async function closePid(pid: number): Promise<void> {
-  await execFileAsync("taskkill", ["/PID", String(pid), "/T", "/F"]).catch(() => undefined);
+  await execFileAsync("taskkill", ["/PID", String(pid), "/F"]).catch(() => undefined);
 }
 
 export async function closeAllRoblox(): Promise<number> {
