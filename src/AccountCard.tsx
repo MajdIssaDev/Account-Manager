@@ -72,20 +72,18 @@ export default function AccountCard(props: {
           <div className="tag">@{a.username}</div>
         </div>
       </div>
-      {assigned.length > 0 && (
-        <div className="card-labels">
-          {assigned.map((label) => (
-            <span
-              key={label.id}
-              className="chip on"
-              style={{ borderColor: label.color, background: `${label.color}22`, color: label.color }}
-            >
-              <span className="dot" style={{ background: label.color }} />
-              {label.name}
-            </span>
-          ))}
-        </div>
-      )}
+      <div className="card-labels">
+        {assigned.map((label) => (
+          <span
+            key={label.id}
+            className="chip on"
+            style={{ borderColor: label.color, background: `${label.color}22`, color: label.color }}
+          >
+            <span className="dot" style={{ background: label.color }} />
+            {label.name}
+          </span>
+        ))}
+      </div>
       <div className="meta">{formatWhen(a.lastLoginAt)}</div>
       {error && <p className="error">{error}</p>}
       <div className="actions" onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>

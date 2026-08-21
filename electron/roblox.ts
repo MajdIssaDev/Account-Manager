@@ -1,4 +1,4 @@
-import { execFile, spawn } from "child_process";
+import { execFile, spawn, spawnSync, type ChildProcess } from "child_process";
 import { existsSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { promisify } from "util";
@@ -101,19 +101,91 @@ export function resolveRobloxPlayer(): string | null {
   return newestPlayerIn(custom);
 }
 
-async function waitForNewPid(before: number[], timeoutMs = 20000): Promise<number> {
+async function waitForNewPid(before: number[], timeoutMs = 25000): Promise<number> {
   const start = Date.now();
+  let candidate: number | null = null;
+  let seenAt = 0;
   while (Date.now() - start < timeoutMs) {
     const now = await listProcessPids(PLAYER);
-    const fresh = now.filter((p) => !before.includes(p));
+    const fresh = now.filter((p) => !before.includes(p) && isPidAlive(p));
     if (fresh.length) {
-      return fresh[fresh.length - 1];
+      const pid = fresh[fresh.length - 1];
+      if (candidate !== pid) {
+        candidate = pid;
+        seenAt = Date.now();
+      } else if (Date.now() - seenAt >= 600) {
+        return pid;
+      }
+    } else {
+      candidate = null;
     }
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 120));
   }
-  throw new Error(
-    "Roblox started but a new client PID was not found. If you need two clients, enable multi-instance first.",
-  );
+  throw new Error("Roblox started but a second client did not stay open.");
+}
+
+function unlockHelperPath(): string | null {
+  const candidates = [
+    join(__dirname, "../../build/roblox-unlock.exe"),
+    join(process.resourcesPath || "", "roblox-unlock.exe"),
+  ];
+  for (const path of candidates) {
+    if (path && existsSync(path)) {
+      return path;
+    }
+  }
+  return null;
+}
+
+let watcher: ChildProcess | null = null;
+let watchRefs = 0;
+
+function releaseRobloxSingleton(): void {
+  const exe = unlockHelperPath();
+  if (!exe) {
+    return;
+  }
+  spawnSync(exe, [], { windowsHide: true, timeout: 4000, stdio: "ignore" });
+}
+
+export function beginSingletonWatch(): void {
+  watchRefs += 1;
+  if (watcher && !watcher.killed) {
+    return;
+  }
+  const exe = unlockHelperPath();
+  if (!exe) {
+    return;
+  }
+  watcher = spawn(exe, ["--watch"], {
+    stdio: ["pipe", "ignore", "ignore"],
+    windowsHide: true,
+    detached: false,
+  });
+  watcher.on("exit", () => {
+    watcher = null;
+  });
+}
+
+export function endSingletonWatch(): void {
+  watchRefs = Math.max(0, watchRefs - 1);
+  if (watchRefs > 0) {
+    return;
+  }
+  if (!watcher) {
+    return;
+  }
+  try {
+    watcher.stdin?.end();
+  } catch {
+    /* ignore */
+  }
+  try {
+    watcher.kill();
+  } catch {
+    /* ignore */
+  }
+  watcher = null;
 }
 
 export async function launchAccount(cookieEnc: string): Promise<number> {
@@ -128,28 +200,30 @@ export async function launchAccount(cookieEnc: string): Promise<number> {
   }
   const cookie = decryptCookie(cookieEnc);
   const ticket = await createAuthenticationTicket(cookie);
-  const before = await listProcessPids(PLAYER);
-  const child = spawn(
-    exe,
-    [
-      "--app",
-      "--authenticationUrl",
-      "https://auth.roblox.com/v1/authentication-ticket/redeem",
-      "--authenticationTicket",
-      ticket,
-      "--launchtime",
-      String(Date.now()),
-    ],
-    { detached: true, stdio: "ignore", windowsHide: false },
-  );
-  child.unref();
+  beginSingletonWatch();
   try {
-    return await waitForNewPid(before);
-  } catch (err) {
-    if (child.pid && isPidAlive(child.pid)) {
-      return child.pid;
+    releaseRobloxSingleton();
+    const before = await listProcessPids(PLAYER);
+    if (before.length > 0 && !unlockHelperPath()) {
+      throw new Error("Cannot start another client: multi-client helper is missing. Rebuild the app.");
     }
-    throw err;
+    const child = spawn(
+      exe,
+      [
+        "--app",
+        "--authenticationUrl",
+        "https://auth.roblox.com/v1/authentication-ticket/redeem",
+        "--authenticationTicket",
+        ticket,
+        "--launchtime",
+        String(Date.now()),
+      ],
+      { detached: true, stdio: "ignore", windowsHide: false },
+    );
+    child.unref();
+    return await waitForNewPid(before);
+  } finally {
+    endSingletonWatch();
   }
 }
 

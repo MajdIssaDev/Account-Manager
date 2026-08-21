@@ -24,7 +24,7 @@ import {
   upsertAccount,
 } from "./store";
 import { attachIfRequested, potassiumStatus } from "./potassium";
-import { closePid, isPidAlive, launchAccount, resolveRobloxPlayer } from "./roblox";
+import { closePid, isPidAlive, launchAccount, resolveRobloxPlayer, beginSingletonWatch, endSingletonWatch } from "./roblox";
 import { focusPid } from "./windows";
 import {
   attachUpdaterWindow,
@@ -405,27 +405,49 @@ function registerIpc(): void {
     }
   };
 
-  ipcMain.handle("accounts:launch", (_e, id: string) => launchOne(id));
+  let launchLock: Promise<void> = Promise.resolve();
+  const withLaunchLock = async <T>(fn: () => Promise<T>): Promise<T> => {
+    let release: () => void = () => undefined;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const prev = launchLock;
+    launchLock = prev.then(() => wait);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  };
 
-  ipcMain.handle("accounts:launchMany", async (_e, ids: string[]) => {
-    const results: { id: string; ok: boolean; error?: string }[] = [];
-    for (const id of ids) {
-      const res = await launchOne(id);
-      results.push({ id, ok: res.ok, error: res.error });
-      await new Promise((r) => setTimeout(r, 700));
-    }
-    const failed = results.filter((r) => !r.ok);
-    if (failed.length && failed.length === results.length) {
-      return fail(failed[0]?.error || "Could not launch selected accounts.");
-    }
-    if (failed.length) {
-      mainWindow?.webContents.send(
-        "toast",
-        `Launched ${results.length - failed.length}, ${failed.length} failed.`,
-      );
-    }
-    return ok(results);
-  });
+  ipcMain.handle("accounts:launch", (_e, id: string) => withLaunchLock(() => launchOne(id)));
+
+  ipcMain.handle("accounts:launchMany", (_e, ids: string[]) =>
+    withLaunchLock(async () => {
+      beginSingletonWatch();
+      try {
+        const results: { id: string; ok: boolean; error?: string }[] = [];
+        for (const id of ids) {
+          const res = await launchOne(id);
+          results.push({ id, ok: res.ok, error: res.error });
+        }
+        const failed = results.filter((r) => !r.ok);
+        if (failed.length && failed.length === results.length) {
+          return fail(failed[0]?.error || "Could not launch selected accounts.");
+        }
+        if (failed.length) {
+          mainWindow?.webContents.send(
+            "toast",
+            `Launched ${results.length - failed.length}, ${failed.length} failed.`,
+          );
+        }
+        return ok(results);
+      } finally {
+        endSingletonWatch();
+      }
+    }),
+  );
 
   ipcMain.handle("accounts:close", async (_e, id: string): Promise<IpcResult> => {
     const pid = pidByAccount.get(id);

@@ -408,6 +408,9 @@ select {
 
 .card {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   background: linear-gradient(180deg, var(--card-top) 0%, var(--bg-card) 100%);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -530,6 +533,7 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin-top: auto;
 }
 
 .actions .btn.primary {
@@ -1022,8 +1026,10 @@ textarea:focus {
 .card-labels {
   display: flex;
   flex-wrap: wrap;
+  align-content: flex-start;
   gap: 4px;
   margin: 8px 0 0;
+  min-height: 22px;
 }
 
 .chip {

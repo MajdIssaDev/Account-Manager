@@ -1,6 +1,6 @@
 {
   "name": "account-manager",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "Local manager for Roblox accounts you own",
   "author": "Account Manager",
   "repository": {
@@ -9,8 +9,8 @@
   },
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "dev": "node scripts/compile-unlock.cjs && electron-vite dev",
+    "build": "node scripts/compile-unlock.cjs && electron-vite build",
     "preview": "electron-vite preview",
     "dist": "npm run build && electron-builder --win --publish never",
     "dist:publish": "npm run build && electron-builder --win nsis --publish always"
@@ -55,6 +55,12 @@
     "asarUnpack": [
       "**/node_modules/electron-updater/**",
       "**/node_modules/builder-util-runtime/**"
+    ],
+    "extraResources": [
+      {
+        "from": "build/roblox-unlock.exe",
+        "to": "roblox-unlock.exe"
+      }
     ],
     "npmRebuild": false,
     "win": {
