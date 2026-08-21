@@ -872,6 +872,36 @@ textarea:focus {
   color: var(--danger);
 }
 
+.label-launch {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.label-launch svg {
+  width: 11px;
+  height: 11px;
+  fill: currentColor;
+}
+
+.label-launch:hover:not(:disabled) {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+.label-launch:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
 .inactive-toggle {
   width: 100%;
   margin-top: auto;

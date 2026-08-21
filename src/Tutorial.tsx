@@ -30,7 +30,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "labels",
     title: "Labels",
-    body: "Filter the grid from this sidebar. Select more than one label to show accounts that have any of them (OR).",
+    body: "Filter the grid from this sidebar. The play button launches every active account with that label. Select more than one label to show accounts that have any of them (OR).",
   },
   {
     target: "inactive",

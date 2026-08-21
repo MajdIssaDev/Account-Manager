@@ -1,13 +1,17 @@
 import { useState } from "react";
 import type { AccountLabel } from "../shared/types";
 import { LABEL_SWATCHES } from "../shared/types";
+import { IconPlay } from "./icons";
 
 export default function LabelSidebar(props: {
   labels: AccountLabel[];
   selectedIds: string[];
   showInactive: boolean;
+  idleByLabel: Record<string, number>;
+  launchBusy: boolean;
   onToggleLabel: (id: string) => void;
   onToggleInactive: () => void;
+  onLaunchLabel: (id: string) => void;
   onNewLabel: () => void;
   onUpdate: (id: string, patch: { name?: string; color?: string }) => void;
   onDelete: (id: string) => void;
@@ -34,6 +38,7 @@ export default function LabelSidebar(props: {
         {props.labels.map((label) => {
           const on = props.selectedIds.includes(label.id);
           const isEdit = editing === label.id;
+          const idle = props.idleByLabel[label.id] || 0;
           return (
             <div key={label.id} className={`label-row${on ? " on" : ""}`}>
               <button
@@ -81,6 +86,23 @@ export default function LabelSidebar(props: {
                   {label.name}
                 </button>
               )}
+              <button
+                type="button"
+                className="label-launch"
+                title={
+                  idle
+                    ? `Launch all ${label.name} (${idle} idle)`
+                    : `No idle ${label.name} accounts`
+                }
+                aria-label={`Launch all ${label.name}`}
+                disabled={props.launchBusy || idle === 0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onLaunchLabel(label.id);
+                }}
+              >
+                <IconPlay />
+              </button>
               {!label.builtin && (
                 <button
                   type="button"

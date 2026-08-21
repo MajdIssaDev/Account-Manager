@@ -26,3 +26,11 @@ export function IconAddUser() {
     </svg>
   );
 }
+
+export function IconPlay() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M7.2 4.6v10.8L16.2 10z" />
+    </svg>
+  );
+}

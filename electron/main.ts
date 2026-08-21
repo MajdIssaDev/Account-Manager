@@ -1,3 +1,4 @@
+import { existsSync } from "fs";
 import { join } from "path";
 import {
   app,
@@ -97,6 +98,14 @@ async function saveCookie(cookieRaw: string): Promise<AccountPublic> {
   return publicAccounts().find((a) => a.id === row.id)!;
 }
 
+function windowIcon(): string | undefined {
+  const dev = join(__dirname, "../../build/icon.png");
+  if (existsSync(dev)) {
+    return dev;
+  }
+  return undefined;
+}
+
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1100,
@@ -105,6 +114,7 @@ function createMainWindow(): void {
     minHeight: 560,
     backgroundColor: "#0b0e16",
     title: "Account Manager",
+    icon: windowIcon(),
     frame: false,
     show: false,
     autoHideMenuBar: true,
@@ -207,6 +217,7 @@ async function openLoginWindow(mode: LoginMode, creds?: QuickCreds): Promise<Ipc
       parent: mainWindow || undefined,
       modal: false,
       title: mode === "signup" ? "Create Roblox account" : "Log in to Roblox",
+      icon: windowIcon(),
       backgroundColor: "#1a1a1a",
       autoHideMenuBar: true,
       webPreferences: {

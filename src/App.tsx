@@ -162,6 +162,28 @@ export default function App() {
   const selectedVisible = selectedIds.filter((id) => visible.some((a) => a.id === id));
   const chip = updateChip(update);
 
+  const idleByLabel = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const label of labels) {
+      counts[label.id] = accounts.filter(
+        (a) => !a.inactive && !a.running && a.labelIds.includes(label.id),
+      ).length;
+    }
+    return counts;
+  }, [accounts, labels]);
+
+  const launchLabel = (labelId: string) => {
+    const label = labels.find((row) => row.id === labelId);
+    const ids = accounts
+      .filter((a) => !a.inactive && !a.running && a.labelIds.includes(labelId))
+      .map((a) => a.id);
+    if (!ids.length) {
+      show(`No idle ${label?.name || "labeled"} accounts to launch.`);
+      return;
+    }
+    void run("__many__", () => window.ram.launchMany(ids), false);
+  };
+
   const pick = (id: string, e: MouseEvent) => {
     if (e.button !== 0 || skipPickRef.current) {
       return;
@@ -445,10 +467,13 @@ export default function App() {
           labels={labels}
           selectedIds={filterLabels}
           showInactive={showInactive}
+          idleByLabel={idleByLabel}
+          launchBusy={busyId === "__many__"}
           onToggleLabel={(id) =>
             setFilterLabels((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
           }
           onToggleInactive={() => setShowInactive((v) => !v)}
+          onLaunchLabel={(id) => void launchLabel(id)}
           onNewLabel={() => setNewLabelFor([])}
           onUpdate={(id, patch) => void window.ram.updateLabel(id, patch)}
           onDelete={(id) => void window.ram.deleteLabel(id)}
