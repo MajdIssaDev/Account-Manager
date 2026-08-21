@@ -1,0 +1,98 @@
+{
+  "name": "account-manager",
+  "version": "1.0.0",
+  "description": "Local manager for Roblox accounts you own",
+  "author": "Account Manager",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MajdIssaDev/Account-Manager.git"
+  },
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "dist": "npm run build && electron-builder --win --publish never",
+    "dist:publish": "npm run build && electron-builder --win nsis --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^35.1.5",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^3.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.5"
+  },
+  "build": {
+    "appId": "com.accountmanager.app",
+    "productName": "Account Manager",
+    "copyright": "Account Manager",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "!**/.vscode/*",
+      "!src/*",
+      "!electron/*",
+      "!shared/*",
+      "!electron.vite.config.ts",
+      "!build/*.cs",
+      "!release/**",
+      "!**/*.exe",
+      "!{tsconfig.json,tsconfig.node.json,tsconfig.web.json,README.md,.gitignore}"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/electron-updater/**",
+      "**/node_modules/builder-util-runtime/**"
+    ],
+    "npmRebuild": false,
+    "win": {
+      "icon": "build/icon.png",
+      "executableName": "Account Manager",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "perMachine": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Account Manager",
+      "uninstallDisplayName": "Account Manager",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "artifactName": "Account-Manager-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Account-Manager-${version}-portable.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "MajdIssaDev",
+        "repo": "Account-Manager",
+        "private": true,
+        "releaseType": "release"
+      }
+    ]
+  }
+}
