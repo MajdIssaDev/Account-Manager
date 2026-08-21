@@ -508,6 +508,7 @@ export default function App() {
                     onLaunch={() => run(a.id, () => window.ram.launch(a.id), true)}
                     onFocus={() => run(a.id, () => window.ram.focus(a.id))}
                     onClose={() => run(a.id, () => window.ram.close(a.id))}
+                    onRemove={() => setRemoveIds([a.id])}
                   />
                 ))}
               </div>
@@ -521,10 +522,7 @@ export default function App() {
         <SettingsModal
           settings={settings}
           update={update}
-          onClose={() => {
-            setSettingsOpen(false);
-            applyTheme(settings.themeId);
-          }}
+          onClose={() => setSettingsOpen(false)}
           onSaved={(s) => {
             setSettings(s);
             applyTheme(s.themeId);

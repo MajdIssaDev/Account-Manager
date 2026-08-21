@@ -21,6 +21,11 @@ export default function SettingsModal(props: {
   const [status, setStatus] = useState<string>("");
   const [checking, setChecking] = useState(false);
 
+  const cancel = () => {
+    document.documentElement.setAttribute("data-theme", props.settings.themeId || "midnight");
+    props.onClose();
+  };
+
   const save = async () => {
     const next = await window.ram.setSettings({
       robloxPlayerPath: robloxPlayerPath.trim(),
@@ -39,7 +44,7 @@ export default function SettingsModal(props: {
   const update = props.update;
 
   return (
-    <div className="overlay" onMouseDown={props.onClose}>
+    <div className="overlay" onMouseDown={cancel}>
       <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>Settings</h2>
         <label>Roblox Player path (optional)</label>
@@ -183,7 +188,7 @@ export default function SettingsModal(props: {
               Restart to apply
             </button>
           )}
-          <button className="btn" onClick={props.onClose}>
+          <button className="btn" onClick={cancel}>
             Cancel
           </button>
           <button className="btn primary" onClick={() => void save()}>

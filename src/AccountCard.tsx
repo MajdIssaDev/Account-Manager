@@ -23,6 +23,7 @@ export default function AccountCard(props: {
   onLaunch: () => void;
   onFocus: () => void;
   onClose: () => void;
+  onRemove: () => void;
 }) {
   const { account: a, busy, error, labels, selected } = props;
   const initial = (a.displayName || a.username || "?").slice(0, 1).toUpperCase();
@@ -33,6 +34,19 @@ export default function AccountCard(props: {
       onClick={props.onPick}
       onContextMenu={props.onContextMenu}
     >
+      <button
+        type="button"
+        className="card-x"
+        title="Remove"
+        disabled={busy}
+        onClick={(e) => {
+          e.stopPropagation();
+          props.onRemove();
+        }}
+        onContextMenu={(e) => e.stopPropagation()}
+      >
+        ×
+      </button>
       <div className="card-head">
         {a.avatarUrl ? (
           <img className="avatar" src={a.avatarUrl} alt="" />
