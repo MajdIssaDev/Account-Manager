@@ -52,9 +52,8 @@ export default function AddAccountModal(props: {
     <div className="overlay" onMouseDown={() => { if (!busy) props.onClose(); }}>
       <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>Add account</h2>
-        <p>
-          Session cookies stay in the main process (encrypted on this PC). Captcha and 2FA stay
-          in the Roblox page — this app does not solve them.
+        <p className="hint">
+          Cookies stay encrypted on this PC. Captcha and 2FA stay in the Roblox page.
         </p>
         <div className="tabs">
           {(["paste", "login", "signup", "quick"] as Tab[]).map((t) => (
@@ -72,7 +71,7 @@ export default function AddAccountModal(props: {
           <>
             <label>.ROBLOSECURITY</label>
             <textarea
-              rows={5}
+              rows={4}
               value={cookie}
               onChange={(e) => setCookie(e.target.value)}
               placeholder="Paste the cookie value only"

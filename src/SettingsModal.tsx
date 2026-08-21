@@ -44,7 +44,7 @@ export default function SettingsModal(props: {
           onChange={(e) => setPath(e.target.value)}
           placeholder="%LOCALAPPDATA%\Roblox\Versions\...\RobloxPlayerBeta.exe"
         />
-        <label className="attach" style={{ marginTop: 12 }}>
+        <label className="attach attach-block">
           <input
             type="checkbox"
             checked={attachOnLaunch}
@@ -66,7 +66,7 @@ export default function SettingsModal(props: {
         />
         <p className="hint">Placeholders: {"{pid}"} and {"{account}"}.</p>
 
-        <h2 style={{ marginTop: 22 }}>Updates</h2>
+        <h2 className="modal-section">Updates</h2>
         <p className="hint">
           This build is <strong>v{update?.currentVersion || "…"}</strong>
           {update?.latestVersion ? ` · GitHub latest v${update.latestVersion}` : ""}.

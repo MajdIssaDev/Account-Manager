@@ -23,7 +23,7 @@ export default function AccountCard(props: {
   const { account: a, busy, error } = props;
   const initial = (a.displayName || a.username || "?").slice(0, 1).toUpperCase();
   return (
-    <article className="card">
+    <article className={`card${a.running ? " running" : ""}`}>
       <div className="card-head">
         {a.avatarUrl ? (
           <img className="avatar" src={a.avatarUrl} alt="" />
@@ -32,7 +32,7 @@ export default function AccountCard(props: {
         )}
         <div className="names">
           <div className="display">
-            {a.displayName}
+            <span>{a.displayName}</span>
             {a.running && <span className="badge">running</span>}
           </div>
           <div className="tag">@{a.username}</div>

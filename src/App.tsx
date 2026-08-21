@@ -91,7 +91,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          Account Manager
+          <strong>Account Manager</strong>
           <span>your accounts, locally</span>
         </div>
         <button
@@ -132,8 +132,8 @@ export default function App() {
 
       {accounts.length === 0 ? (
         <div className="empty">
-          <p>No accounts yet. Add one with a session cookie, Roblox login, signup, or quick add.</p>
-          <p>Multi-client only works if you already run more than one RobloxPlayerBeta.exe.</p>
+          <h3>No accounts yet</h3>
+          <p>Add one with a session cookie, Roblox login, signup, or quick add.</p>
         </div>
       ) : (
         <div className="grid">
