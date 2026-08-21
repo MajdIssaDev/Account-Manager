@@ -34,7 +34,9 @@ import {
   isRobloxPlayerPid,
   launchAccount,
   listProcessPids,
+  prepareNextLaunch,
   resolveRobloxPlayer,
+  setPersistentUnlock,
 } from "./roblox";
 import { focusPid } from "./windows";
 import {
@@ -46,6 +48,7 @@ import {
   installUpdate,
   maybeAutoCheck,
 } from "./updater";
+import { startHiveWatcher, reloadHiveWatcher, livenessFor, sendCommand, sendMany, hiveStatusSnapshot, hiveWorkspacePath } from "./hive";
 import type {
   AccountPatch,
   AccountPublic,
@@ -64,7 +67,7 @@ let mainWindow: BrowserWindow | null = null;
 let loginWindow: BrowserWindow | null = null;
 
 const LAUNCH_JOB_TIMEOUT_MS = 75_000;
-const LAUNCH_GAP_MS = 2_000;
+const LAUNCH_GAP_MS = 2_500;
 const PID_MISS_LIMIT = 3;
 
 type LaunchJob = {
@@ -88,6 +91,10 @@ function persistRuntimes(): void {
   }
 }
 
+function syncUnlockFromPids(): void {
+  setPersistentUnlock(pidByAccount.size > 0);
+}
+
 function rememberPid(id: string, pid: number): void {
   for (const [other, otherPid] of Array.from(pidByAccount.entries())) {
     if (otherPid === pid && other !== id) {
@@ -98,22 +105,26 @@ function rememberPid(id: string, pid: number): void {
   pidByAccount.set(id, pid);
   pidMisses.delete(id);
   persistRuntimes();
+  syncUnlockFromPids();
 }
 
 function forgetPid(id: string): void {
   pidMisses.delete(id);
   if (pidByAccount.delete(id)) {
     persistRuntimes();
+    syncUnlockFromPids();
   }
 }
 
 function forgetAllPids(): void {
   pidMisses.clear();
   if (pidByAccount.size === 0) {
+    setPersistentUnlock(false);
     return;
   }
   pidByAccount.clear();
   persistRuntimes();
+  setPersistentUnlock(false);
 }
 
 async function restoreRuntimes(): Promise<number> {
@@ -139,6 +150,7 @@ async function restoreRuntimes(): Promise<number> {
     restored += 1;
   }
   persistRuntimes();
+  syncUnlockFromPids();
   return restored;
 }
 
@@ -159,6 +171,7 @@ function publicAccounts(): AccountPublic[] {
       labelIds: a.labelIds || [],
       inactive: Boolean(a.inactive),
       sortOrder: typeof a.sortOrder === "number" ? a.sortOrder : 0,
+      hiveStatus: livenessFor(a.userId),
     };
   });
 }
@@ -180,6 +193,36 @@ function emitLaunchBusy(): void {
 
 function emitSettings(): void {
   mainWindow?.webContents.send("settings:changed", getSettings());
+}
+
+function resolveHiveUserId(accountId?: string, userId?: number): number | null {
+  if (typeof userId === "number" && Number.isFinite(userId) && userId > 0) {
+    return Math.floor(userId);
+  }
+  if (accountId) {
+    const row = getAccount(accountId);
+    if (row && row.userId > 0) {
+      return row.userId;
+    }
+  }
+  return null;
+}
+
+function resolveHiveUserIds(accountIds?: string[], userIds?: number[]): number[] {
+  const out: number[] = [];
+  for (const id of accountIds || []) {
+    const uid = resolveHiveUserId(id);
+    if (uid) {
+      out.push(uid);
+    }
+  }
+  for (const uid of userIds || []) {
+    const n = resolveHiveUserId(undefined, uid);
+    if (n) {
+      out.push(n);
+    }
+  }
+  return Array.from(new Set(out));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -584,6 +627,7 @@ function registerIpc(): void {
         launchActiveId = null;
         emitLaunchBusy();
         if (launchQueue.length > 0) {
+          await prepareNextLaunch();
           await sleep(LAUNCH_GAP_MS);
         }
       }
@@ -670,6 +714,7 @@ function registerIpc(): void {
   ipcMain.handle("settings:get", () => getSettings());
   ipcMain.handle("settings:set", (_e, patch: Partial<AppSettings>) => {
     const next = setSettings(patch);
+    reloadHiveWatcher();
     emitAccounts();
     emitSettings();
     return next;
@@ -678,6 +723,17 @@ function registerIpc(): void {
     const win = BrowserWindow.fromWebContents(e.sender);
     const picked = await dialog.showOpenDialog(win || undefined, {
       title: "Choose Roblox folder",
+      properties: ["openDirectory"],
+    });
+    if (picked.canceled || !picked.filePaths[0]) {
+      return null;
+    }
+    return picked.filePaths[0];
+  });
+  ipcMain.handle("settings:pickHiveFolder", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const picked = await dialog.showOpenDialog(win || undefined, {
+      title: "Choose CloudFarm writefile workspace (folder containing CloudFarmHive)",
       properties: ["openDirectory"],
     });
     if (picked.canceled || !picked.filePaths[0]) {
@@ -709,12 +765,44 @@ function registerIpc(): void {
     mainWindow?.close();
   });
   ipcMain.handle("window:isMaximized", () => Boolean(mainWindow?.isMaximized()));
+
+  ipcMain.handle("hive:status", () => hiveStatusSnapshot());
+  ipcMain.handle("hive:workspace", () => hiveWorkspacePath());
+  ipcMain.handle("hive:send", async (_e, input: { userId?: number; accountId?: string; op: string; payload?: Record<string, unknown>; timeoutMs?: number }) => {
+    const userId = resolveHiveUserId(input?.accountId, input?.userId);
+    if (!userId) {
+      return fail("Unknown hive account.");
+    }
+    const result = await sendCommand(userId, String(input?.op || ""), input?.payload || {}, Number(input?.timeoutMs) || 25000);
+    return ok(result);
+  });
+  ipcMain.handle("hive:sendMany", async (_e, input: { userIds?: number[]; accountIds?: string[]; op: string; payload?: Record<string, unknown>; timeoutMs?: number }) => {
+    const userIds = resolveHiveUserIds(input?.accountIds, input?.userIds);
+    if (!userIds.length) {
+      return fail("No hive accounts selected.");
+    }
+    const batch = await sendMany(userIds, String(input?.op || ""), input?.payload || {}, Number(input?.timeoutMs) || 25000);
+    if (batch.dropped > 0) {
+      mainWindow?.webContents.send(
+        "toast",
+        `${batch.dropped} client${batch.dropped === 1 ? "" : "s"} offline — excluded from hive command.`,
+      );
+    }
+    return ok(batch);
+  });
 }
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   initUpdater();
   registerIpc();
+  startHiveWatcher({
+    getSettings,
+    onChange: () => {
+      emitAccounts();
+      mainWindow?.webContents.send("hive:changed", hiveStatusSnapshot());
+    },
+  });
   const restored = await restoreRuntimes();
   createMainWindow();
   if (restored > 0) {

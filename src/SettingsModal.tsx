@@ -21,6 +21,9 @@ export default function SettingsModal(props: {
   const [autoDownloadUpdates, setAutoDownload] = useState(props.settings.autoDownloadUpdates);
   const [githubToken, setToken] = useState(props.settings.githubToken);
   const [themeId, setThemeId] = useState<ThemeId>(props.settings.themeId || "midnight");
+  const [hiveWorkspacePath, setHivePath] = useState(props.settings.hiveWorkspacePath || "");
+  const [hiveHeartbeatTtlMs, setHiveTtl] = useState(String(props.settings.hiveHeartbeatTtlMs || 5000));
+  const [hiveRelaunchUi, setHiveRelaunch] = useState(props.settings.hiveRelaunchUi === true);
   const [status, setStatus] = useState<string>("");
   const [checking, setChecking] = useState(false);
 
@@ -35,6 +38,9 @@ export default function SettingsModal(props: {
       autoDownloadUpdates,
       githubToken: githubToken.trim(),
       themeId,
+      hiveWorkspacePath: hiveWorkspacePath.trim(),
+      hiveHeartbeatTtlMs: Number(hiveHeartbeatTtlMs) || 5000,
+      hiveRelaunchUi,
     });
     props.onSaved(next);
     props.onClose();
@@ -116,6 +122,46 @@ export default function SettingsModal(props: {
           placeholder={`"C:\\Path\\to\\potassium.exe" --attach {pid}`}
         />
         <p className="hint">Placeholders: {"{pid}"} and {"{account}"}.</p>
+
+        <h2 className="modal-section">Hive / CloudFarm</h2>
+        <p className="hint">
+          Folder that contains <code>CloudFarmHive/</code> (Potassium writefile root). Session heartbeat older
+          than the TTL is treated as stale and excluded from Sell all / Eat all.
+        </p>
+        <label>Hive workspace</label>
+        <div className="path-row">
+          <input
+            value={hiveWorkspacePath}
+            onChange={(e) => setHivePath(e.target.value)}
+            placeholder="%LOCALAPPDATA%\Potassium\workspace\AO project"
+          />
+          <button
+            type="button"
+            className="btn"
+            onClick={async () => {
+              const folder = await window.ram.pickHiveFolder();
+              if (folder) {
+                setHivePath(folder);
+              }
+            }}
+          >
+            Browse
+          </button>
+        </div>
+        <label>Heartbeat TTL (ms)</label>
+        <input
+          value={hiveHeartbeatTtlMs}
+          onChange={(e) => setHiveTtl(e.target.value)}
+          placeholder="5000"
+        />
+        <label className="attach">
+          <input
+            type="checkbox"
+            checked={hiveRelaunchUi}
+            onChange={(e) => setHiveRelaunch(e.target.checked)}
+          />
+          Relaunch UI when hive goes offline (saved only — inject not wired yet)
+        </label>
 
         <h2 className="modal-section">Appearance</h2>
         <p className="hint">Color presets apply to the whole app. Click one to preview, then Save.</p>

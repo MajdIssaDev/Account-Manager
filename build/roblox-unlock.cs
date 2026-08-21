@@ -72,7 +72,7 @@ internal static class Program
         while (true)
         {
             CloseSingletons();
-            Thread.Sleep(35);
+            Thread.Sleep(25);
         }
     }
 
@@ -234,6 +234,24 @@ internal static class Program
         }
     }
 
+    private static bool IsSingletonName(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+        {
+            return false;
+        }
+        if (name.IndexOf("ROBLOX_singleton", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+        if (name.IndexOf("Roblox", StringComparison.OrdinalIgnoreCase) >= 0
+            && name.IndexOf("singleton", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return true;
+        }
+        return false;
+    }
+
     private static void CloseIfSingleton(IntPtr process, IntPtr handleValue)
     {
         if (handleValue == IntPtr.Zero)
@@ -250,7 +268,7 @@ internal static class Program
         try
         {
             string name = ObjectName(local);
-            if (name == null || name.IndexOf("ROBLOX_singleton", StringComparison.OrdinalIgnoreCase) < 0)
+            if (!IsSingletonName(name))
             {
                 return;
             }

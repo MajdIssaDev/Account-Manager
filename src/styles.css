@@ -994,9 +994,10 @@ textarea:focus {
   top: auto;
   bottom: 14px;
   transform: translateX(-50%);
-  width: min(520px, calc(100% - 24px));
+  width: min(760px, calc(100% - 24px));
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 12px;
   margin: 0;
@@ -1094,6 +1095,63 @@ textarea:focus {
 .badge.inactive {
   background: rgba(255, 107, 122, 0.16);
   color: var(--danger);
+}
+
+.badge.hive-connected {
+  background: rgba(94, 234, 212, 0.16);
+  color: var(--accent-cyan);
+}
+
+.badge.hive-stale {
+  background: rgba(251, 191, 36, 0.16);
+  color: #fbbf24;
+}
+
+.badge.hive-offline {
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--muted);
+}
+
+.modal-wide {
+  width: min(560px, calc(100% - 24px));
+}
+
+.but-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow: auto;
+  margin: 10px 0;
+  padding: 4px 0;
+}
+
+.but-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.but-name {
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.but-meta {
+  color: var(--muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.but-results {
+  margin: 8px 0 4px;
+  max-height: 140px;
+  overflow: auto;
 }
 
 .pick {

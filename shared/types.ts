@@ -5,6 +5,8 @@ export type AccountLabel = {
   builtin: boolean;
 };
 
+export type HiveLiveness = "connected" | "stale" | "offline";
+
 export type AccountPublic = {
   id: string;
   userId: number;
@@ -18,6 +20,7 @@ export type AccountPublic = {
   labelIds: string[];
   inactive: boolean;
   sortOrder: number;
+  hiveStatus: HiveLiveness;
 };
 
 export type ThemeId = "midnight" | "ocean" | "ember" | "forest" | "violet" | "mono";
@@ -52,6 +55,44 @@ export const LABEL_SWATCHES = [
   "#38bdf8",
 ];
 
+export type HiveSession = {
+  userId: number;
+  liveness: HiveLiveness;
+  connected: boolean;
+  alive: boolean;
+  lastHeartbeatAt: number | null;
+  sessionId?: string;
+  placeId?: number;
+  jobId?: string;
+  path: string;
+};
+
+export type HiveCommandResult = {
+  v: number;
+  id: string;
+  ok: boolean;
+  error?: string;
+  data?: Record<string, unknown>;
+};
+
+export type HiveSendManyResult = {
+  userId: number;
+  accountId?: string;
+  ok: boolean;
+  error?: string;
+  skipped?: boolean;
+  data?: Record<string, unknown>;
+};
+
+export type HiveInventoryItem = {
+  name: string;
+  amount?: number;
+  count?: number;
+  rarity?: number;
+  category?: string;
+  key?: string;
+};
+
 export type AppSettings = {
   robloxPlayerPath: string;
   attachOnLaunch: boolean;
@@ -64,6 +105,9 @@ export type AppSettings = {
   themeId: ThemeId;
   tutorialDone: boolean;
   useDefaultRobloxFolder: boolean;
+  hiveWorkspacePath: string;
+  hiveHeartbeatTtlMs: number;
+  hiveRelaunchUi: boolean;
 };
 
 export type LoginMode = "login" | "signup" | "quick";

@@ -10,6 +10,7 @@ import Tutorial from "./Tutorial";
 import TitleBarControls from "./TitleBarControls";
 import ContextMenu, { type CtxItem } from "./ContextMenu";
 import NewLabelModal from "./NewLabelModal";
+import HiveButModal from "./HiveButModal";
 import { IconAddUser, IconGear, IconInfo, IconStop } from "./icons";
 
 function updateChip(state: UpdateState | null): { label: string; kind: string } {
@@ -59,6 +60,7 @@ export default function App() {
   const skipPickRef = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number; ids: string[] } | null>(null);
   const [newLabelFor, setNewLabelFor] = useState<string[] | null>(null);
+  const [hiveBut, setHiveBut] = useState<"sell" | "eat" | null>(null);
 
   useEffect(() => {
     void window.ram.listAccounts().then(setAccounts);
@@ -153,6 +155,9 @@ export default function App() {
   }, [accounts, filterLabels, showInactive]);
 
   const selectedVisible = selectedIds.filter((id) => visible.some((a) => a.id === id));
+  const selectedConnected = visible.filter(
+    (a) => selectedIds.includes(a.id) && a.hiveStatus === "connected",
+  );
   const chip = updateChip(update);
 
   const [dragIds, setDragIds] = useState<string[] | null>(null);
@@ -840,6 +845,7 @@ export default function App() {
             <div className="launch-bar" data-tour="launch-selected">
               <span>
                 {selectedVisible.length} selected
+                {selectedConnected.length > 0 ? ` · ${selectedConnected.length} hive` : ""}
                 {showInactive ? " · inactive view" : ""}
               </span>
               <button className="btn" onClick={() => setSelectedIds([])}>
@@ -853,6 +859,30 @@ export default function App() {
                 }
               >
                 Launch selected
+              </button>
+              <button
+                className="btn"
+                disabled={selectedConnected.length === 0}
+                title={
+                  selectedConnected.length === 0
+                    ? "No selected accounts have a live hive session"
+                    : `Sell on ${selectedConnected.length} connected client${selectedConnected.length === 1 ? "" : "s"}`
+                }
+                onClick={() => setHiveBut("sell")}
+              >
+                Sell all…
+              </button>
+              <button
+                className="btn"
+                disabled={selectedConnected.length === 0}
+                title={
+                  selectedConnected.length === 0
+                    ? "No selected accounts have a live hive session"
+                    : `Eat on ${selectedConnected.length} connected client${selectedConnected.length === 1 ? "" : "s"}`
+                }
+                onClick={() => setHiveBut("eat")}
+              >
+                Eat all…
               </button>
             </div>
           ) : null}
@@ -874,6 +904,17 @@ export default function App() {
             setSettingsOpen(false);
             setTourSkip(true);
             setTourOpen(true);
+          }}
+        />
+      )}
+      {hiveBut && (
+        <HiveButModal
+          kind={hiveBut}
+          accounts={selectedConnected}
+          onClose={() => setHiveBut(null)}
+          onDone={(summary) => {
+            setToast(summary);
+            window.setTimeout(() => setToast(null), 5000);
           }}
         />
       )}

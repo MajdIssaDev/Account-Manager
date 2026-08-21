@@ -7,6 +7,7 @@ import { decryptCookie, getSettings } from "./store";
 
 const execFileAsync = promisify(execFile);
 const PLAYER = "RobloxPlayerBeta.exe";
+const INSTALLER_NAMES = ["RobloxPlayerInstaller.exe", "RobloxStudioInstaller.exe"];
 
 export async function listProcessPids(imageName: string): Promise<number[]> {
   const fromTasklist = await listPidsViaTasklist(imageName);
@@ -132,28 +133,51 @@ export function findRobloxPlayer(explicitPath?: string): string | null {
 
 export function resolveRobloxPlayer(): string | null {
   const settings = getSettings();
+  const pick = (path: string | null): string | null => {
+    if (!path) {
+      return null;
+    }
+    if (!path.toLowerCase().endsWith("robloxplayerbeta.exe")) {
+      return null;
+    }
+    return path;
+  };
   if (settings.useDefaultRobloxFolder) {
-    return newestPlayerIn(defaultRobloxVersionsDir());
+    return pick(newestPlayerIn(defaultRobloxVersionsDir()));
   }
   const custom = (settings.robloxPlayerPath || "").trim();
   if (!custom) {
     return null;
   }
-  if (existsSync(custom) && custom.toLowerCase().endsWith(".exe")) {
+  if (existsSync(custom) && custom.toLowerCase().endsWith("robloxplayerbeta.exe")) {
     return custom;
   }
-  return newestPlayerIn(custom);
+  return pick(newestPlayerIn(custom));
 }
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((r) => setTimeout(r, ms));
 }
 
-async function waitUntilAppears(before: number[], timeoutMs = 20000): Promise<number> {
+async function killInstallersNow(): Promise<boolean> {
+  let killed = false;
+  for (const name of INSTALLER_NAMES) {
+    const pids = await listProcessPids(name);
+    if (!pids.length) {
+      continue;
+    }
+    await execFileAsync("taskkill", ["/IM", name, "/T", "/F"]).catch(() => undefined);
+    killed = true;
+  }
+  return killed;
+}
+
+async function waitUntilAppears(before: number[], timeoutMs = 25000): Promise<number> {
   const start = Date.now();
   let candidate: number | null = null;
   let seenAt = 0;
   while (Date.now() - start < timeoutMs) {
+    await killInstallersNow();
     const now = await listProcessPids(PLAYER);
     const fresh = now.filter((p) => !before.includes(p) && isPidAlive(p));
     if (fresh.length) {
@@ -161,21 +185,22 @@ async function waitUntilAppears(before: number[], timeoutMs = 20000): Promise<nu
       if (candidate !== pid) {
         candidate = pid;
         seenAt = Date.now();
-      } else if (Date.now() - seenAt >= 300) {
+      } else if (Date.now() - seenAt >= 250) {
         return pid;
       }
     } else {
       candidate = null;
     }
-    await sleep(80);
+    await sleep(60);
   }
+  await killInstallersNow();
   throw new Error("Roblox did not start a new client.");
 }
 
 async function waitUntilStable(
   initial: number,
   before: number[],
-  holdMs = 3200,
+  holdMs = 2800,
   timeoutMs = 28000,
 ): Promise<number> {
   const start = Date.now();
@@ -183,6 +208,7 @@ async function waitUntilStable(
   let heldAt = Date.now();
   let missing = 0;
   while (Date.now() - start < timeoutMs) {
+    await killInstallersNow();
     const now = await listProcessPids(PLAYER);
     const fresh = now.filter((p) => !before.includes(p) && isPidAlive(p));
     if (!fresh.includes(current)) {
@@ -201,15 +227,16 @@ async function waitUntilStable(
     } else {
       missing = 0;
     }
-    await sleep(120);
+    await sleep(100);
   }
   throw new Error("The new client closed before it finished starting.");
 }
 
 function unlockHelperPath(): string | null {
   const candidates = [
-    join(__dirname, "../../build/roblox-unlock.exe"),
     join(process.resourcesPath || "", "roblox-unlock.exe"),
+    join(__dirname, "../../build/roblox-unlock.exe"),
+    join(__dirname, "../build/roblox-unlock.exe"),
   ];
   for (const path of candidates) {
     if (path && existsSync(path)) {
@@ -221,6 +248,8 @@ function unlockHelperPath(): string | null {
 
 let watcher: ChildProcess | null = null;
 let watchRefs = 0;
+let persistUnlock = false;
+let installerGuard: ReturnType<typeof setInterval> | null = null;
 
 function releaseRobloxSingleton(): void {
   const exe = unlockHelperPath();
@@ -230,8 +259,28 @@ function releaseRobloxSingleton(): void {
   spawnSync(exe, [], { windowsHide: true, timeout: 4000, stdio: "ignore" });
 }
 
-export function beginSingletonWatch(): void {
-  watchRefs += 1;
+function startInstallerGuard(): void {
+  if (installerGuard) {
+    return;
+  }
+  void killInstallersNow();
+  installerGuard = setInterval(() => {
+    void killInstallersNow();
+  }, 350);
+}
+
+function stopInstallerGuardIfIdle(): void {
+  if (persistUnlock || watchRefs > 0) {
+    return;
+  }
+  if (!installerGuard) {
+    return;
+  }
+  clearInterval(installerGuard);
+  installerGuard = null;
+}
+
+function startWatcher(): void {
   if (watcher && !watcher.killed) {
     return;
   }
@@ -246,12 +295,14 @@ export function beginSingletonWatch(): void {
   });
   watcher.on("exit", () => {
     watcher = null;
+    if (persistUnlock || watchRefs > 0) {
+      startWatcher();
+    }
   });
 }
 
-export function endSingletonWatch(): void {
-  watchRefs = Math.max(0, watchRefs - 1);
-  if (watchRefs > 0) {
+function stopWatcherIfIdle(): void {
+  if (persistUnlock || watchRefs > 0) {
     return;
   }
   if (!watcher) {
@@ -270,6 +321,55 @@ export function endSingletonWatch(): void {
   watcher = null;
 }
 
+export function beginSingletonWatch(): void {
+  watchRefs += 1;
+  startWatcher();
+  startInstallerGuard();
+}
+
+export function endSingletonWatch(): void {
+  watchRefs = Math.max(0, watchRefs - 1);
+  stopWatcherIfIdle();
+  stopInstallerGuardIfIdle();
+}
+
+/** Keep multi-client unlock alive while any managed client is running. */
+export function setPersistentUnlock(enabled: boolean): void {
+  persistUnlock = enabled;
+  if (enabled) {
+    startWatcher();
+    startInstallerGuard();
+    releaseRobloxSingleton();
+  } else {
+    stopWatcherIfIdle();
+    stopInstallerGuardIfIdle();
+  }
+}
+
+export async function prepareNextLaunch(): Promise<void> {
+  await killInstallersNow();
+  releaseRobloxSingleton();
+  await sleep(120);
+  releaseRobloxSingleton();
+}
+
+function spawnPlayer(exe: string, ticket: string): void {
+  const child = spawn(
+    exe,
+    [
+      "--app",
+      "--authenticationUrl",
+      "https://auth.roblox.com/v1/authentication-ticket/redeem",
+      "--authenticationTicket",
+      ticket,
+      "--launchtime",
+      String(Date.now()),
+    ],
+    { detached: true, stdio: "ignore", windowsHide: false },
+  );
+  child.unref();
+}
+
 export async function launchAccount(cookieEnc: string): Promise<number> {
   const settings = getSettings();
   const exe = resolveRobloxPlayer();
@@ -280,35 +380,44 @@ export async function launchAccount(cookieEnc: string): Promise<number> {
         : "RobloxPlayerBeta.exe not found in the custom folder. Pick a folder that contains it, or use Default folder.",
     );
   }
+  if (!exe.toLowerCase().endsWith("robloxplayerbeta.exe")) {
+    throw new Error("Launch path must be RobloxPlayerBeta.exe (not the installer).");
+  }
+  if (!unlockHelperPath()) {
+    throw new Error("Cannot start clients: multi-client helper is missing. Rebuild the app.");
+  }
   const cookie = decryptCookie(cookieEnc);
   const ticket = await createAuthenticationTicket(cookie);
+  await killInstallersNow();
   const before = await listProcessPids(PLAYER);
-  if (before.length > 0 && !unlockHelperPath()) {
-    throw new Error("Cannot start another client: multi-client helper is missing. Rebuild the app.");
-  }
   beginSingletonWatch();
-  let appeared: number;
   try {
     releaseRobloxSingleton();
-    const child = spawn(
-      exe,
-      [
-        "--app",
-        "--authenticationUrl",
-        "https://auth.roblox.com/v1/authentication-ticket/redeem",
-        "--authenticationTicket",
-        ticket,
-        "--launchtime",
-        String(Date.now()),
-      ],
-      { detached: true, stdio: "ignore", windowsHide: false },
-    );
-    child.unref();
-    appeared = await waitUntilAppears(before);
+    await sleep(80);
+    releaseRobloxSingleton();
+    spawnPlayer(exe, ticket);
+
+    // If Roblox opens the installer instead of the client, kill it and launch the player again.
+    const appearDeadline = Date.now() + 12000;
+    let retried = 0;
+    while (Date.now() < appearDeadline) {
+      const fresh = (await listProcessPids(PLAYER)).filter((p) => !before.includes(p) && isPidAlive(p));
+      if (fresh.length) {
+        break;
+      }
+      if ((await killInstallersNow()) && retried < 3) {
+        releaseRobloxSingleton();
+        spawnPlayer(exe, ticket);
+        retried += 1;
+      }
+      await sleep(80);
+    }
+
+    const appeared = await waitUntilAppears(before);
+    return await waitUntilStable(appeared, before);
   } finally {
     endSingletonWatch();
   }
-  return await waitUntilStable(appeared, before);
 }
 
 export async function closePid(pid: number): Promise<void> {
@@ -320,5 +429,6 @@ export async function closeAllRoblox(): Promise<number> {
   if (pids.length) {
     await execFileAsync("taskkill", ["/IM", PLAYER, "/T", "/F"]).catch(() => undefined);
   }
+  await killInstallersNow();
   return pids.length;
 }

@@ -36,6 +36,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   themeId: "midnight",
   tutorialDone: false,
   useDefaultRobloxFolder: true,
+  hiveWorkspacePath: "",
+  hiveHeartbeatTtlMs: 5000,
+  hiveRelaunchUi: false,
 };
 
 function dataDir(): string {
@@ -134,6 +137,10 @@ function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
   } else {
     merged.useDefaultRobloxFolder = Boolean(merged.useDefaultRobloxFolder);
   }
+  merged.hiveWorkspacePath = String(merged.hiveWorkspacePath || "").trim();
+  const ttl = Number(merged.hiveHeartbeatTtlMs);
+  merged.hiveHeartbeatTtlMs = Number.isFinite(ttl) ? Math.max(1000, Math.floor(ttl)) : 5000;
+  merged.hiveRelaunchUi = Boolean(merged.hiveRelaunchUi);
   return merged;
 }
 

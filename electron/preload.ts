@@ -4,6 +4,9 @@ import type {
   AccountPatch,
   AccountPublic,
   AppSettings,
+  HiveCommandResult,
+  HiveSendManyResult,
+  HiveSession,
   IpcResult,
   LoginMode,
   PotassiumStatus,
@@ -39,6 +42,7 @@ const api = {
   setSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
     ipcRenderer.invoke("settings:set", patch),
   pickRobloxFolder: (): Promise<string | null> => ipcRenderer.invoke("settings:pickRobloxFolder"),
+  pickHiveFolder: (): Promise<string | null> => ipcRenderer.invoke("settings:pickHiveFolder"),
   resolveRoblox: (): Promise<string | null> => ipcRenderer.invoke("settings:resolveRoblox"),
   potassiumStatus: (): Promise<PotassiumStatus> => ipcRenderer.invoke("potassium:status"),
   getUpdateState: (): Promise<UpdateState> => ipcRenderer.invoke("updater:state"),
@@ -73,6 +77,20 @@ const api = {
     const listener = (_e: unknown, next: AppSettings): void => cb(next);
     ipcRenderer.on("settings:changed", listener);
     return () => ipcRenderer.removeListener("settings:changed", listener);
+  },
+  hiveStatus: (): Promise<HiveSession[]> => ipcRenderer.invoke("hive:status"),
+  hiveWorkspace: (): Promise<string> => ipcRenderer.invoke("hive:workspace"),
+  hiveSend: (
+    input: { userId?: number; accountId?: string; op: string; payload?: Record<string, unknown>; timeoutMs?: number },
+  ): Promise<IpcResult<HiveCommandResult>> => ipcRenderer.invoke("hive:send", input),
+  hiveSendMany: (
+    input: { userIds?: number[]; accountIds?: string[]; op: string; payload?: Record<string, unknown>; timeoutMs?: number },
+  ): Promise<IpcResult<{ dropped: number; results: HiveSendManyResult[] }>> =>
+    ipcRenderer.invoke("hive:sendMany", input),
+  onHiveChanged: (cb: (sessions: HiveSession[]) => void): (() => void) => {
+    const listener = (_e: unknown, sessions: HiveSession[]): void => cb(sessions);
+    ipcRenderer.on("hive:changed", listener);
+    return () => ipcRenderer.removeListener("hive:changed", listener);
   },
   onMaximized: (cb: (maximized: boolean) => void): (() => void) => {
     const listener = (_e: unknown, maximized: boolean): void => cb(maximized);
