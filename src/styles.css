@@ -943,6 +943,7 @@ textarea:focus {
 }
 
 .cards-stage {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -954,6 +955,8 @@ textarea:focus {
 .launch-bar {
   position: absolute;
   left: 50%;
+  right: auto;
+  top: auto;
   bottom: 14px;
   transform: translateX(-50%);
   width: min(520px, calc(100% - 24px));
@@ -961,18 +964,24 @@ textarea:focus {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
+  margin: 0;
   border: 1px solid var(--line-hot);
   border-radius: 12px;
   background: var(--bg-elev);
   backdrop-filter: blur(12px);
   box-shadow: var(--shadow);
-  z-index: 5;
+  z-index: 6;
+  pointer-events: auto;
 }
 
 .launch-bar span {
   margin-right: auto;
   font-weight: 650;
   font-size: 12px;
+}
+
+.cards-stage.has-launch-bar .grid {
+  padding-bottom: 64px;
 }
 
 .card.picked {

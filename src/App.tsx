@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { AccountPublic, AppSettings, UpdateState } from "../shared/types";
 import { DEFAULT_LABELS } from "../shared/types";
 import AddAccountModal from "./AddAccountModal";
@@ -55,6 +55,7 @@ export default function App() {
   const [removeIds, setRemoveIds] = useState<string[] | null>(null);
   const [tourOpen, setTourOpen] = useState(false);
   const [tourSkip, setTourSkip] = useState(true);
+  const skipPickRef = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number; ids: string[] } | null>(null);
   const [newLabelFor, setNewLabelFor] = useState<string[] | null>(null);
 
@@ -162,6 +163,9 @@ export default function App() {
   const chip = updateChip(update);
 
   const pick = (id: string, e: MouseEvent) => {
+    if (e.button !== 0 || skipPickRef.current) {
+      return;
+    }
     const ids = visible.map((a) => a.id);
     const idx = ids.indexOf(id);
     if (idx < 0) {
@@ -191,6 +195,10 @@ export default function App() {
   const openMenu = (id: string, e: MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
+    skipPickRef.current = true;
+    window.setTimeout(() => {
+      skipPickRef.current = false;
+    }, 400);
     const ids = selectedIds.includes(id) && selectedIds.length > 0 ? selectedIds : [id];
     setMenu({ x: e.clientX, y: e.clientY, ids });
   };
@@ -447,10 +455,13 @@ export default function App() {
         />
         <div className="main">
           <div
-            className="cards-stage"
+            className={`cards-stage${selectedVisible.length > 0 || tourOpen ? " has-launch-bar" : ""}`}
             data-tour="cards"
             onMouseDown={(e) => {
-              if ((e.target as HTMLElement).closest(".card")) {
+              if (e.button !== 0) {
+                return;
+              }
+              if ((e.target as HTMLElement).closest(".card, .launch-bar")) {
                 return;
               }
               setSelectedIds([]);

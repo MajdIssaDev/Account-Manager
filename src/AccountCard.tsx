@@ -31,8 +31,18 @@ export default function AccountCard(props: {
   return (
     <article
       className={`card${a.running ? " running" : ""}${selected ? " picked" : ""}`}
-      onClick={props.onPick}
-      onContextMenu={props.onContextMenu}
+      onClick={(e) => {
+        if (e.button !== 0) {
+          return;
+        }
+        props.onPick(e);
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        props.onContextMenu(e);
+      }}
+      onAuxClick={(e) => e.preventDefault()}
     >
       <button
         type="button"
