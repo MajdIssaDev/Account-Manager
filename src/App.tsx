@@ -47,6 +47,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [launchBusyIds, setLaunchBusyIds] = useState<string[]>([]);
   const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [anchorId, setAnchorId] = useState<string | null>(null);
@@ -70,6 +71,7 @@ export default function App() {
       }
     });
     void window.ram.getUpdateState().then(setUpdate);
+    void window.ram.getLaunchBusy().then(setLaunchBusyIds);
     const offA = window.ram.onAccountsChanged(setAccounts);
     const offS = window.ram.onSettingsChanged((s) => {
       setSettings(s);
@@ -80,11 +82,13 @@ export default function App() {
       window.setTimeout(() => setToast(null), 5000);
     });
     const offU = window.ram.onUpdateState(setUpdate);
+    const offL = window.ram.onLaunchBusy(setLaunchBusyIds);
     return () => {
       offA();
       offS();
       offT();
       offU();
+      offL();
     };
   }, []);
 
@@ -119,6 +123,7 @@ export default function App() {
     }
   };
 
+  const queueBusy = launchBusyIds.length > 0;
   const labels = settings?.labels?.length ? settings.labels : DEFAULT_LABELS;
 
   const visible = useMemo(() => {
@@ -658,7 +663,7 @@ export default function App() {
           className="icon-btn"
           aria-label="Close all Roblox"
           title="Close all Roblox"
-          disabled={busyId === "__many__"}
+          disabled={busyId === "__many__" || queueBusy}
           onClick={() =>
             void run(
               "__many__",
@@ -715,7 +720,7 @@ export default function App() {
           selectedIds={filterLabels}
           showInactive={showInactive}
           idleByLabel={idleByLabel}
-          launchBusy={busyId === "__many__"}
+          launchBusy={busyId === "__many__" || queueBusy}
           onToggleLabel={(id) =>
             setFilterLabels((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
           }
@@ -773,7 +778,7 @@ export default function App() {
                       key={a.id}
                       account={a}
                       labels={labels}
-                      busy={busyId === a.id || busyId === "__many__"}
+                      busy={busyId === a.id || busyId === "__many__" || launchBusyIds.includes(a.id)}
                       selected={selectedIds.includes(a.id)}
                       error={cardErrors[a.id]}
                       onPick={(e) => pick(a.id, e)}
@@ -842,7 +847,7 @@ export default function App() {
               </button>
               <button
                 className="btn primary"
-                disabled={busyId === "__many__" || selectedVisible.length === 0}
+                disabled={busyId === "__many__" || queueBusy || selectedVisible.length === 0}
                 onClick={() =>
                   run("__many__", () => window.ram.launchMany(selectedVisible), false)
                 }

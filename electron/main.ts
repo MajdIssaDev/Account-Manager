@@ -16,16 +16,26 @@ import {
   getAccount,
   getSettings,
   listStoredAccounts,
+  loadRuntimes,
   patchAccount,
   removeAccount,
   reorderAccounts,
+  saveRuntimes,
   setSettings,
   touchLastLogin,
   updateLabel,
   upsertAccount,
 } from "./store";
 import { attachIfRequested, potassiumStatus } from "./potassium";
-import { closeAllRoblox, closePid, isPidAlive, launchAccount, resolveRobloxPlayer } from "./roblox";
+import {
+  closeAllRoblox,
+  closePid,
+  isPidAlive,
+  isRobloxPlayerPid,
+  launchAccount,
+  listProcessPids,
+  resolveRobloxPlayer,
+} from "./roblox";
 import { focusPid } from "./windows";
 import {
   attachUpdaterWindow,
@@ -49,16 +59,93 @@ app.setName("Account Manager");
 app.setPath("userData", join(app.getPath("appData"), "AccountManager"));
 
 const pidByAccount = new Map<string, number>();
+const pidMisses = new Map<string, number>();
 let mainWindow: BrowserWindow | null = null;
 let loginWindow: BrowserWindow | null = null;
+
+const LAUNCH_JOB_TIMEOUT_MS = 75_000;
+const LAUNCH_GAP_MS = 2_000;
+const PID_MISS_LIMIT = 3;
+
+type LaunchJob = {
+  id: string;
+  resolve: (result: IpcResult<{ pid: number }>) => void;
+};
+
+const launchQueue: LaunchJob[] = [];
+let launchActiveId: string | null = null;
+let launchPumpRunning = false;
+
+function persistRuntimes(): void {
+  const map: Record<string, number> = {};
+  pidByAccount.forEach((pid, id) => {
+    map[id] = pid;
+  });
+  try {
+    saveRuntimes(map);
+  } catch {
+    /* keep memory map even if disk write fails */
+  }
+}
+
+function rememberPid(id: string, pid: number): void {
+  for (const [other, otherPid] of Array.from(pidByAccount.entries())) {
+    if (otherPid === pid && other !== id) {
+      pidByAccount.delete(other);
+      pidMisses.delete(other);
+    }
+  }
+  pidByAccount.set(id, pid);
+  pidMisses.delete(id);
+  persistRuntimes();
+}
+
+function forgetPid(id: string): void {
+  pidMisses.delete(id);
+  if (pidByAccount.delete(id)) {
+    persistRuntimes();
+  }
+}
+
+function forgetAllPids(): void {
+  pidMisses.clear();
+  if (pidByAccount.size === 0) {
+    return;
+  }
+  pidByAccount.clear();
+  persistRuntimes();
+}
+
+async function restoreRuntimes(): Promise<number> {
+  const saved = loadRuntimes();
+  const known = new Set(listStoredAccounts().map((a) => a.id));
+  const live = new Set(await listProcessPids("RobloxPlayerBeta.exe"));
+  const claimed = new Set<number>();
+  let restored = 0;
+  pidByAccount.clear();
+  pidMisses.clear();
+  for (const [id, pid] of Object.entries(saved)) {
+    if (!known.has(id) || !live.has(pid) || claimed.has(pid)) {
+      continue;
+    }
+    if (!isPidAlive(pid)) {
+      continue;
+    }
+    if (!(await isRobloxPlayerPid(pid))) {
+      continue;
+    }
+    pidByAccount.set(id, pid);
+    claimed.add(pid);
+    restored += 1;
+  }
+  persistRuntimes();
+  return restored;
+}
 
 function publicAccounts(): AccountPublic[] {
   return listStoredAccounts().map((a) => {
     const pid = pidByAccount.get(a.id);
     const running = typeof pid === "number" && isPidAlive(pid);
-    if (!running && pid) {
-      pidByAccount.delete(a.id);
-    }
     return {
       id: a.id,
       userId: a.userId,
@@ -80,8 +167,23 @@ function emitAccounts(): void {
   mainWindow?.webContents.send("accounts:changed", publicAccounts());
 }
 
+function emitLaunchBusy(): void {
+  const ids = new Set<string>();
+  if (launchActiveId) {
+    ids.add(launchActiveId);
+  }
+  for (const job of launchQueue) {
+    ids.add(job.id);
+  }
+  mainWindow?.webContents.send("launch:busy", Array.from(ids));
+}
+
 function emitSettings(): void {
   mainWindow?.webContents.send("settings:changed", getSettings());
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function ok<T>(data?: T): IpcResult<T> {
@@ -341,7 +443,7 @@ function registerIpc(): void {
     if (pid && isPidAlive(pid)) {
       return fail("Close this client before removing the account.");
     }
-    pidByAccount.delete(id);
+    forgetPid(id);
     if (!removeAccount(id)) {
       return fail("Account not found.");
     }
@@ -394,7 +496,10 @@ function registerIpc(): void {
     return ok();
   });
 
-  const launchOne = async (id: string): Promise<IpcResult<{ pid: number }>> => {
+  const launchOne = async (
+    id: string,
+    cancelled?: { value: boolean },
+  ): Promise<IpcResult<{ pid: number }>> => {
     const row = getAccount(id);
     if (!row) {
       return fail("Account not found.");
@@ -405,7 +510,10 @@ function registerIpc(): void {
     }
     try {
       const pid = await launchAccount(row.cookieEnc);
-      pidByAccount.set(id, pid);
+      if (cancelled?.value) {
+        return fail("Launch timed out — moved on so the queue cannot stay stuck.");
+      }
+      rememberPid(id, pid);
       touchLastLogin(id);
       emitAccounts();
       const warn = await attachIfRequested(pid, row.username);
@@ -414,51 +522,117 @@ function registerIpc(): void {
       }
       return ok({ pid });
     } catch (err) {
+      if (cancelled?.value) {
+        return fail("Launch timed out — moved on so the queue cannot stay stuck.");
+      }
       return fail(err instanceof Error ? err.message : String(err));
     }
   };
 
-  let launchLock: Promise<void> = Promise.resolve();
-  const withLaunchLock = async <T>(fn: () => Promise<T>): Promise<T> => {
-    let release: () => void = () => undefined;
-    const wait = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const prev = launchLock;
-    launchLock = prev.then(() => wait);
-    await prev;
-    try {
-      return await fn();
-    } finally {
-      release();
+  const enqueueLaunch = (id: string): Promise<IpcResult<{ pid: number }>> => {
+    const existing = pidByAccount.get(id);
+    if (existing && isPidAlive(existing)) {
+      return Promise.resolve(fail("This account is already running. Use Focus."));
     }
+    if (launchActiveId === id || launchQueue.some((job) => job.id === id)) {
+      return Promise.resolve(fail("This account is already queued to launch."));
+    }
+    return new Promise((resolve) => {
+      launchQueue.push({ id, resolve });
+      emitLaunchBusy();
+      void pumpLaunchQueue();
+    });
   };
 
-  ipcMain.handle("accounts:launch", (_e, id: string) => withLaunchLock(() => launchOne(id)));
+  const pumpLaunchQueue = async (): Promise<void> => {
+    if (launchPumpRunning) {
+      return;
+    }
+    launchPumpRunning = true;
+    try {
+      while (launchQueue.length > 0) {
+        const job = launchQueue.shift()!;
+        launchActiveId = job.id;
+        emitLaunchBusy();
 
-  ipcMain.handle("accounts:launchMany", (_e, ids: string[]) =>
-    withLaunchLock(async () => {
-      const results: { id: string; ok: boolean; error?: string }[] = [];
-      for (let i = 0; i < ids.length; i++) {
-        const res = await launchOne(ids[i]);
-        results.push({ id: ids[i], ok: res.ok, error: res.error });
-        if (i < ids.length - 1) {
-          await new Promise((r) => setTimeout(r, 500));
+        let settled = false;
+        const finish = (result: IpcResult<{ pid: number }>) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          job.resolve(result);
+        };
+
+        const cancelled = { value: false };
+        const pending = launchOne(job.id, cancelled);
+        const timedOut = sleep(LAUNCH_JOB_TIMEOUT_MS).then(() => null as null);
+        try {
+          const result = await Promise.race([pending, timedOut]);
+          if (result === null) {
+            cancelled.value = true;
+            finish(fail("Launch timed out — moved on so the queue cannot stay stuck."));
+            // Brief grace so a hung launch can finish without blocking forever.
+            await Promise.race([pending.then(() => undefined, () => undefined), sleep(15_000)]);
+          } else {
+            finish(result);
+          }
+        } catch (err) {
+          finish(fail(err instanceof Error ? err.message : String(err)));
+        }
+
+        launchActiveId = null;
+        emitLaunchBusy();
+        if (launchQueue.length > 0) {
+          await sleep(LAUNCH_GAP_MS);
         }
       }
-      const failed = results.filter((r) => !r.ok);
-      if (failed.length && failed.length === results.length) {
-        return fail(failed[0]?.error || "Could not launch selected accounts.");
+    } finally {
+      launchPumpRunning = false;
+      launchActiveId = null;
+      emitLaunchBusy();
+      if (launchQueue.length > 0) {
+        void pumpLaunchQueue();
       }
-      if (failed.length) {
-        mainWindow?.webContents.send(
-          "toast",
-          `Launched ${results.length - failed.length}, ${failed.length} failed.`,
-        );
-      }
-      return ok(results);
-    }),
-  );
+    }
+  };
+  ipcMain.handle("accounts:launch", (_e, id: string) => enqueueLaunch(id));
+
+  ipcMain.handle("accounts:launchMany", async (_e, ids: string[]) => {
+    const list = Array.isArray(ids) ? ids.filter((id) => typeof id === "string" && id) : [];
+    const unique = Array.from(new Set(list));
+    if (!unique.length) {
+      return fail("No accounts to launch.");
+    }
+    const results = await Promise.all(
+      unique.map(async (id) => {
+        const res = await enqueueLaunch(id);
+        return { id, ok: res.ok, error: res.error };
+      }),
+    );
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length && failed.length === results.length) {
+      return fail(failed[0]?.error || "Could not launch selected accounts.");
+    }
+    if (failed.length) {
+      mainWindow?.webContents.send(
+        "toast",
+        `Launched ${results.length - failed.length}, ${failed.length} failed.`,
+      );
+    }
+    return ok(results);
+  });
+
+  ipcMain.handle("launch:busy", () => {
+    const ids = new Set<string>();
+    if (launchActiveId) {
+      ids.add(launchActiveId);
+    }
+    for (const job of launchQueue) {
+      ids.add(job.id);
+    }
+    return Array.from(ids);
+  });
 
   ipcMain.handle("accounts:close", async (_e, id: string): Promise<IpcResult> => {
     const pid = pidByAccount.get(id);
@@ -466,14 +640,14 @@ function registerIpc(): void {
       return fail("That client is not running.");
     }
     await closePid(pid);
-    pidByAccount.delete(id);
+    forgetPid(id);
     emitAccounts();
     return ok();
   });
 
   ipcMain.handle("accounts:closeAll", async (): Promise<IpcResult<{ closed: number }>> => {
     const closed = await closeAllRoblox();
-    pidByAccount.clear();
+    forgetAllPids();
     emitAccounts();
     return ok({ closed });
   });
@@ -481,7 +655,7 @@ function registerIpc(): void {
   ipcMain.handle("accounts:focus", async (_e, id: string): Promise<IpcResult> => {
     const pid = pidByAccount.get(id);
     if (!pid || !isPidAlive(pid)) {
-      pidByAccount.delete(id);
+      forgetPid(id);
       emitAccounts();
       return fail("That client is not running.");
     }
@@ -537,26 +711,52 @@ function registerIpc(): void {
   ipcMain.handle("window:isMaximized", () => Boolean(mainWindow?.isMaximized()));
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   initUpdater();
   registerIpc();
+  const restored = await restoreRuntimes();
   createMainWindow();
+  if (restored > 0) {
+    mainWindow?.webContents.once("did-finish-load", () => {
+      mainWindow?.webContents.send(
+        "toast",
+        `Reconnected ${restored} running Roblox client${restored === 1 ? "" : "s"}.`,
+      );
+      emitAccounts();
+      emitLaunchBusy();
+    });
+  }
   void maybeAutoCheck();
   setInterval(() => {
-    let dirty = false;
-    for (const [id, pid] of pidByAccount) {
-      if (!isPidAlive(pid)) {
-        pidByAccount.delete(id);
-        dirty = true;
+    void (async () => {
+      const live = new Set(await listProcessPids("RobloxPlayerBeta.exe"));
+      let dirty = false;
+      for (const [id, pid] of Array.from(pidByAccount.entries())) {
+        const alive = live.has(pid) && isPidAlive(pid);
+        if (alive) {
+          pidMisses.delete(id);
+          continue;
+        }
+        const misses = (pidMisses.get(id) || 0) + 1;
+        pidMisses.set(id, misses);
+        if (misses >= PID_MISS_LIMIT) {
+          forgetPid(id);
+          dirty = true;
+        }
       }
-    }
-    if (dirty) {
-      emitAccounts();
-    }
+      if (dirty) {
+        emitAccounts();
+      }
+    })();
   }, 1500);
 });
 
+app.on("before-quit", () => {
+  persistRuntimes();
+});
+
 app.on("window-all-closed", () => {
+  persistRuntimes();
   app.quit();
 });

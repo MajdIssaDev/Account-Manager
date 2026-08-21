@@ -9,6 +9,14 @@ const execFileAsync = promisify(execFile);
 const PLAYER = "RobloxPlayerBeta.exe";
 
 export async function listProcessPids(imageName: string): Promise<number[]> {
+  const fromTasklist = await listPidsViaTasklist(imageName);
+  if (fromTasklist.length) {
+    return fromTasklist;
+  }
+  return listPidsViaPowerShell(imageName);
+}
+
+async function listPidsViaTasklist(imageName: string): Promise<number[]> {
   try {
     const { stdout } = await execFileAsync("tasklist", [
       "/FI",
@@ -28,7 +36,35 @@ export async function listProcessPids(imageName: string): Promise<number[]> {
         pids.push(pid);
       }
     }
-    return pids;
+    return Array.from(new Set(pids));
+  } catch {
+    return [];
+  }
+}
+
+async function listPidsViaPowerShell(imageName: string): Promise<number[]> {
+  const name = imageName.replace(/\.exe$/i, "").replace(/'/g, "");
+  if (!name) {
+    return [];
+  }
+  try {
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        `Get-Process -Name '${name}' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }`,
+      ],
+      { windowsHide: true, timeout: 6000 },
+    );
+    const pids: number[] = [];
+    for (const line of stdout.split(/\r?\n/)) {
+      const pid = Number(line.trim());
+      if (Number.isFinite(pid) && pid > 0) {
+        pids.push(pid);
+      }
+    }
+    return Array.from(new Set(pids));
   } catch {
     return [];
   }
@@ -41,6 +77,14 @@ export function isPidAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+export async function isRobloxPlayerPid(pid: number): Promise<boolean> {
+  if (!isPidAlive(pid)) {
+    return false;
+  }
+  const pids = await listProcessPids(PLAYER);
+  return pids.includes(pid);
 }
 
 export function defaultRobloxVersionsDir(): string {
@@ -131,8 +175,8 @@ async function waitUntilAppears(before: number[], timeoutMs = 20000): Promise<nu
 async function waitUntilStable(
   initial: number,
   before: number[],
-  holdMs = 2200,
-  timeoutMs = 22000,
+  holdMs = 3200,
+  timeoutMs = 28000,
 ): Promise<number> {
   const start = Date.now();
   let current = initial;

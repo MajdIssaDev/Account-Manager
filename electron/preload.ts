@@ -26,6 +26,7 @@ const api = {
     ipcRenderer.invoke("accounts:launch", id),
   launchMany: (ids: string[]): Promise<IpcResult> =>
     ipcRenderer.invoke("accounts:launchMany", ids),
+  getLaunchBusy: (): Promise<string[]> => ipcRenderer.invoke("launch:busy"),
   close: (id: string): Promise<IpcResult> => ipcRenderer.invoke("accounts:close", id),
   closeAll: (): Promise<IpcResult<{ closed: number }>> => ipcRenderer.invoke("accounts:closeAll"),
   focus: (id: string): Promise<IpcResult> => ipcRenderer.invoke("accounts:focus", id),
@@ -52,6 +53,11 @@ const api = {
     const listener = (_e: unknown, accounts: AccountPublic[]): void => cb(accounts);
     ipcRenderer.on("accounts:changed", listener);
     return () => ipcRenderer.removeListener("accounts:changed", listener);
+  },
+  onLaunchBusy: (cb: (ids: string[]) => void): (() => void) => {
+    const listener = (_e: unknown, ids: string[]): void => cb(ids);
+    ipcRenderer.on("launch:busy", listener);
+    return () => ipcRenderer.removeListener("launch:busy", listener);
   },
   onToast: (cb: (message: string) => void): (() => void) => {
     const listener = (_e: unknown, message: string): void => cb(message);

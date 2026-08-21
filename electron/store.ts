@@ -46,6 +46,43 @@ function dataFile(): string {
   return join(dataDir(), "store.json");
 }
 
+function runtimesFile(): string {
+  return join(dataDir(), "runtimes.json");
+}
+
+export type RuntimeMap = Record<string, number>;
+
+export function loadRuntimes(): RuntimeMap {
+  const file = runtimesFile();
+  if (!existsSync(file)) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as RuntimeMap;
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    const next: RuntimeMap = {};
+    for (const [id, pid] of Object.entries(parsed)) {
+      const n = Number(pid);
+      if (typeof id === "string" && id && Number.isFinite(n) && n > 0) {
+        next[id] = Math.floor(n);
+      }
+    }
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+export function saveRuntimes(map: RuntimeMap): void {
+  const dir = dataDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  writeFileSync(runtimesFile(), JSON.stringify(map, null, 2), "utf8");
+}
+
 function emptyStore(): FileShape {
   return { accounts: [], settings: { ...DEFAULT_SETTINGS, labels: DEFAULT_LABELS.map((l) => ({ ...l })) } };
 }
