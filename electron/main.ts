@@ -24,7 +24,7 @@ import {
   upsertAccount,
 } from "./store";
 import { attachIfRequested, potassiumStatus } from "./potassium";
-import { closePid, isPidAlive, launchAccount, resolveRobloxPlayer, beginSingletonWatch, endSingletonWatch } from "./roblox";
+import { closeAllRoblox, closePid, isPidAlive, launchAccount, resolveRobloxPlayer } from "./roblox";
 import { focusPid } from "./windows";
 import {
   attachUpdaterWindow,
@@ -425,27 +425,25 @@ function registerIpc(): void {
 
   ipcMain.handle("accounts:launchMany", (_e, ids: string[]) =>
     withLaunchLock(async () => {
-      beginSingletonWatch();
-      try {
-        const results: { id: string; ok: boolean; error?: string }[] = [];
-        for (const id of ids) {
-          const res = await launchOne(id);
-          results.push({ id, ok: res.ok, error: res.error });
+      const results: { id: string; ok: boolean; error?: string }[] = [];
+      for (let i = 0; i < ids.length; i++) {
+        const res = await launchOne(ids[i]);
+        results.push({ id: ids[i], ok: res.ok, error: res.error });
+        if (i < ids.length - 1) {
+          await new Promise((r) => setTimeout(r, 500));
         }
-        const failed = results.filter((r) => !r.ok);
-        if (failed.length && failed.length === results.length) {
-          return fail(failed[0]?.error || "Could not launch selected accounts.");
-        }
-        if (failed.length) {
-          mainWindow?.webContents.send(
-            "toast",
-            `Launched ${results.length - failed.length}, ${failed.length} failed.`,
-          );
-        }
-        return ok(results);
-      } finally {
-        endSingletonWatch();
       }
+      const failed = results.filter((r) => !r.ok);
+      if (failed.length && failed.length === results.length) {
+        return fail(failed[0]?.error || "Could not launch selected accounts.");
+      }
+      if (failed.length) {
+        mainWindow?.webContents.send(
+          "toast",
+          `Launched ${results.length - failed.length}, ${failed.length} failed.`,
+        );
+      }
+      return ok(results);
     }),
   );
 
@@ -458,6 +456,13 @@ function registerIpc(): void {
     pidByAccount.delete(id);
     emitAccounts();
     return ok();
+  });
+
+  ipcMain.handle("accounts:closeAll", async (): Promise<IpcResult<{ closed: number }>> => {
+    const closed = await closeAllRoblox();
+    pidByAccount.clear();
+    emitAccounts();
+    return ok({ closed });
   });
 
   ipcMain.handle("accounts:focus", async (_e, id: string): Promise<IpcResult> => {

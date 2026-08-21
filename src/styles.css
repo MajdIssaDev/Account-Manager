@@ -1355,11 +1355,15 @@ textarea:focus {
   left: 100%;
   top: 0;
   min-width: 196px;
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: auto;
   background: var(--modal-bg);
   border: 1px solid var(--line-hot);
   border-radius: 10px;
   padding: 4px;
   box-shadow: var(--shadow);
+  z-index: 1;
 }
 
 .ctx-list.nested .ctx-item {

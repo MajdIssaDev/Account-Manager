@@ -101,7 +101,11 @@ export function resolveRobloxPlayer(): string | null {
   return newestPlayerIn(custom);
 }
 
-async function waitForNewPid(before: number[], timeoutMs = 25000): Promise<number> {
+async function sleep(ms: number): Promise<void> {
+  await new Promise((r) => setTimeout(r, ms));
+}
+
+async function waitUntilAppears(before: number[], timeoutMs = 20000): Promise<number> {
   const start = Date.now();
   let candidate: number | null = null;
   let seenAt = 0;
@@ -113,15 +117,49 @@ async function waitForNewPid(before: number[], timeoutMs = 25000): Promise<numbe
       if (candidate !== pid) {
         candidate = pid;
         seenAt = Date.now();
-      } else if (Date.now() - seenAt >= 600) {
+      } else if (Date.now() - seenAt >= 300) {
         return pid;
       }
     } else {
       candidate = null;
     }
-    await new Promise((r) => setTimeout(r, 120));
+    await sleep(80);
   }
-  throw new Error("Roblox started but a second client did not stay open.");
+  throw new Error("Roblox did not start a new client.");
+}
+
+async function waitUntilStable(
+  initial: number,
+  before: number[],
+  holdMs = 2200,
+  timeoutMs = 22000,
+): Promise<number> {
+  const start = Date.now();
+  let current = initial;
+  let heldAt = Date.now();
+  let missing = 0;
+  while (Date.now() - start < timeoutMs) {
+    const now = await listProcessPids(PLAYER);
+    const fresh = now.filter((p) => !before.includes(p) && isPidAlive(p));
+    if (!fresh.includes(current)) {
+      if (!fresh.length) {
+        missing += 1;
+        if (missing >= 4) {
+          throw new Error("The new client closed before it finished starting.");
+        }
+      } else {
+        missing = 0;
+        current = fresh[fresh.length - 1];
+        heldAt = Date.now();
+      }
+    } else if (Date.now() - heldAt >= holdMs) {
+      return current;
+    } else {
+      missing = 0;
+    }
+    await sleep(120);
+  }
+  throw new Error("The new client closed before it finished starting.");
 }
 
 function unlockHelperPath(): string | null {
@@ -200,13 +238,14 @@ export async function launchAccount(cookieEnc: string): Promise<number> {
   }
   const cookie = decryptCookie(cookieEnc);
   const ticket = await createAuthenticationTicket(cookie);
+  const before = await listProcessPids(PLAYER);
+  if (before.length > 0 && !unlockHelperPath()) {
+    throw new Error("Cannot start another client: multi-client helper is missing. Rebuild the app.");
+  }
   beginSingletonWatch();
+  let appeared: number;
   try {
     releaseRobloxSingleton();
-    const before = await listProcessPids(PLAYER);
-    if (before.length > 0 && !unlockHelperPath()) {
-      throw new Error("Cannot start another client: multi-client helper is missing. Rebuild the app.");
-    }
     const child = spawn(
       exe,
       [
@@ -221,12 +260,21 @@ export async function launchAccount(cookieEnc: string): Promise<number> {
       { detached: true, stdio: "ignore", windowsHide: false },
     );
     child.unref();
-    return await waitForNewPid(before);
+    appeared = await waitUntilAppears(before);
   } finally {
     endSingletonWatch();
   }
+  return await waitUntilStable(appeared, before);
 }
 
 export async function closePid(pid: number): Promise<void> {
   await execFileAsync("taskkill", ["/PID", String(pid), "/T", "/F"]).catch(() => undefined);
+}
+
+export async function closeAllRoblox(): Promise<number> {
+  const pids = await listProcessPids(PLAYER);
+  if (pids.length) {
+    await execFileAsync("taskkill", ["/IM", PLAYER, "/T", "/F"]).catch(() => undefined);
+  }
+  return pids.length;
 }

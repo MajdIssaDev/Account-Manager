@@ -25,6 +25,7 @@ const api = {
   launchMany: (ids: string[]): Promise<IpcResult> =>
     ipcRenderer.invoke("accounts:launchMany", ids),
   close: (id: string): Promise<IpcResult> => ipcRenderer.invoke("accounts:close", id),
+  closeAll: (): Promise<IpcResult<{ closed: number }>> => ipcRenderer.invoke("accounts:closeAll"),
   focus: (id: string): Promise<IpcResult> => ipcRenderer.invoke("accounts:focus", id),
   createLabel: (name: string, color: string): Promise<IpcResult<AccountLabel>> =>
     ipcRenderer.invoke("labels:create", name, color),

@@ -34,3 +34,11 @@ export function IconPlay() {
     </svg>
   );
 }
+
+export function IconStop() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <rect x="5.5" y="5.5" width="9" height="9" rx="1.2" />
+    </svg>
+  );
+}

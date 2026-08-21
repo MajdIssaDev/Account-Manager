@@ -10,7 +10,7 @@ import Tutorial from "./Tutorial";
 import TitleBarControls from "./TitleBarControls";
 import ContextMenu, { type CtxItem } from "./ContextMenu";
 import NewLabelModal from "./NewLabelModal";
-import { IconAddUser, IconGear, IconInfo } from "./icons";
+import { IconAddUser, IconGear, IconInfo, IconStop } from "./icons";
 
 function updateChip(state: UpdateState | null): { label: string; kind: string } {
   if (!state) {
@@ -429,6 +429,29 @@ export default function App() {
           />
           Attach Potassium on launch
         </label>
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Close all Roblox"
+          title="Close all Roblox"
+          disabled={busyId === "__many__"}
+          onClick={() =>
+            void run(
+              "__many__",
+              async () => {
+                const res = await window.ram.closeAll();
+                if (res.ok) {
+                  const n = res.data?.closed ?? 0;
+                  show(n ? `Closed ${n} Roblox client${n === 1 ? "" : "s"}.` : "No Roblox clients were running.");
+                }
+                return res;
+              },
+              false,
+            )
+          }
+        >
+          <IconStop />
+        </button>
         <button
           type="button"
           className="icon-btn"

@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 export type CtxItem =
   | { type: "sep" }
@@ -13,14 +13,64 @@ export type CtxItem =
       onClick?: () => void;
     };
 
+function placeNested(el: HTMLElement): CSSProperties {
+  const parent = el.parentElement;
+  if (!parent) {
+    return {};
+  }
+  const pr = parent.getBoundingClientRect();
+  const w = el.offsetWidth;
+  const h = el.offsetHeight;
+  const pad = 8;
+  const gap = 2;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  let left = pr.right + gap;
+  if (left + w > vw - pad) {
+    left = pr.left - gap - w;
+  }
+  if (left < pad) {
+    left = Math.max(pad, vw - w - pad);
+  }
+
+  let top = pr.top;
+  if (top + h > vh - pad) {
+    top = Math.max(pad, vh - h - pad);
+  }
+
+  return { position: "fixed", left, top, right: "auto", visibility: "visible" };
+}
+
 function MenuList(props: {
   items: CtxItem[];
   onClose: () => void;
   nested?: boolean;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState<number | null>(null);
+  const [nestedPos, setNestedPos] = useState<CSSProperties | undefined>(
+    props.nested ? { visibility: "hidden" } : undefined,
+  );
+
+  useLayoutEffect(() => {
+    if (!props.nested) {
+      return;
+    }
+    const el = listRef.current;
+    if (!el) {
+      return;
+    }
+    setNestedPos(placeNested(el));
+  }, [props.nested, props.items, open]);
+
   return (
-    <div className={`ctx-list${props.nested ? " nested" : ""}`} role="menu">
+    <div
+      ref={listRef}
+      className={`ctx-list${props.nested ? " nested" : ""}`}
+      role="menu"
+      style={nestedPos}
+    >
       {props.items.map((item, i) => {
         if (item.type === "sep") {
           return <div key={`sep-${i}`} className="ctx-sep" />;
