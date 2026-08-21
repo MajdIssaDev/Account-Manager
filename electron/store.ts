@@ -16,6 +16,7 @@ export type StoredAccount = {
   createdAt: string;
   labelIds: string[];
   inactive: boolean;
+  sortOrder: number;
 };
 
 type FileShape = {
@@ -49,11 +50,12 @@ function emptyStore(): FileShape {
   return { accounts: [], settings: { ...DEFAULT_SETTINGS, labels: DEFAULT_LABELS.map((l) => ({ ...l })) } };
 }
 
-function normalizeAccount(raw: StoredAccount): StoredAccount {
+function normalizeAccount(raw: StoredAccount, index = 0): StoredAccount {
   return {
     ...raw,
     labelIds: Array.isArray(raw.labelIds) ? raw.labelIds : [],
     inactive: Boolean(raw.inactive),
+    sortOrder: typeof raw.sortOrder === "number" && Number.isFinite(raw.sortOrder) ? raw.sortOrder : index,
   };
 }
 
@@ -106,7 +108,9 @@ function readRaw(): FileShape {
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as FileShape;
     return {
-      accounts: Array.isArray(parsed.accounts) ? parsed.accounts.map(normalizeAccount) : [],
+      accounts: Array.isArray(parsed.accounts)
+        ? parsed.accounts.map((a, i) => normalizeAccount(a, i))
+        : [],
       settings: normalizeSettings(parsed.settings),
     };
   } catch {
@@ -143,7 +147,7 @@ export function setSettings(patch: Partial<AppSettings>): AppSettings {
 }
 
 export function listStoredAccounts(): StoredAccount[] {
-  return readRaw().accounts;
+  return [...readRaw().accounts].sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt));
 }
 
 export function encryptCookie(cookie: string): string {
@@ -178,6 +182,7 @@ export function upsertAccount(profile: {
     writeRaw(data);
     return existing;
   }
+  const maxOrder = data.accounts.reduce((m, a) => Math.max(m, a.sortOrder ?? 0), -1);
   const row: StoredAccount = {
     id: randomUUID(),
     userId: profile.userId,
@@ -189,10 +194,37 @@ export function upsertAccount(profile: {
     createdAt: new Date().toISOString(),
     labelIds: [],
     inactive: false,
+    sortOrder: maxOrder + 1,
   };
   data.accounts.push(row);
   writeRaw(data);
   return row;
+}
+
+/** Persist a full account order (ids in display order). Unknown ids are ignored. */
+export function reorderAccounts(orderedIds: string[]): boolean {
+  const data = readRaw();
+  if (!orderedIds.length) {
+    return false;
+  }
+  const byId = new Map(data.accounts.map((a) => [a.id, a]));
+  const seen = new Set<string>();
+  let order = 0;
+  for (const id of orderedIds) {
+    const row = byId.get(id);
+    if (!row || seen.has(id)) {
+      continue;
+    }
+    row.sortOrder = order++;
+    seen.add(id);
+  }
+  for (const row of data.accounts) {
+    if (!seen.has(row.id)) {
+      row.sortOrder = order++;
+    }
+  }
+  writeRaw(data);
+  return true;
 }
 
 export function patchAccount(id: string, patch: AccountPatch): StoredAccount | undefined {

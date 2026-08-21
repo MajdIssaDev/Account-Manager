@@ -418,7 +418,8 @@ select {
   box-shadow: var(--shadow);
   cursor: pointer;
   user-select: none;
-  transition: transform var(--ease), border-color var(--ease), box-shadow var(--ease);
+  touch-action: none;
+  transition: transform var(--ease), border-color var(--ease), box-shadow var(--ease), opacity var(--ease);
 }
 
 .card:hover {
@@ -1023,6 +1024,17 @@ textarea:focus {
   box-shadow: 0 0 0 1px var(--accent);
 }
 
+.card.dragging {
+  opacity: 0.45;
+  transform: scale(0.98);
+  cursor: grabbing;
+}
+
+.card.drop-target {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 1px var(--accent-cyan);
+}
+
 .card-labels {
   display: flex;
   flex-wrap: wrap;
@@ -1177,6 +1189,18 @@ textarea:focus {
     0 0 0 9999px rgba(4, 6, 12, 0.72);
   pointer-events: none;
   z-index: 41;
+  opacity: 0;
+  transition:
+    top 180ms ease,
+    left 180ms ease,
+    width 180ms ease,
+    height 180ms ease,
+    border-radius 180ms ease,
+    opacity 140ms ease;
+}
+
+.tour-hole.on {
+  opacity: 1;
 }
 
 .tour-card {
@@ -1189,6 +1213,16 @@ textarea:focus {
   z-index: 42;
   pointer-events: auto;
   box-shadow: var(--shadow);
+  opacity: 0;
+  transition:
+    top 180ms ease,
+    left 180ms ease,
+    opacity 140ms ease,
+    transform 180ms ease;
+}
+
+.tour-card.on {
+  opacity: 1;
 }
 
 .tour-step {

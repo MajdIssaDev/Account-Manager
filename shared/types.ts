@@ -17,6 +17,7 @@ export type AccountPublic = {
   pid: number | null;
   labelIds: string[];
   inactive: boolean;
+  sortOrder: number;
 };
 
 export type ThemeId = "midnight" | "ocean" | "ember" | "forest" | "violet" | "mono";

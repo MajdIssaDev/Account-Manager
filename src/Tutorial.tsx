@@ -35,7 +35,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "inactive",
     title: "Inactive accounts",
-    body: "Inactive accounts are hidden from the grid. Click Show Inactive to reveal them. Click it alone, with no labels, to see every inactive account.",
+    body: "Inactive accounts are hidden from the grid. Click Show Inactive to reveal them. On an inactive card, Set Active brings it back instead of Launch.",
   },
   {
     target: "create-label",
@@ -45,7 +45,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "cards",
     title: "Account cards",
-    body: "Click a card to select it. Ctrl+click adds or removes one. Shift+click selects a range, left-to-right then top-to-bottom. Right-click opens actions without changing the selection.",
+    body: "Click a card to select it. Ctrl+click adds or removes one. Shift+click selects a range. Hold and drag to reorder; drag several at once when they sit next to each other with no gaps. Right-click opens actions.",
   },
   {
     target: "launch-selected",
@@ -142,7 +142,7 @@ function measureHole(target: string): Hole | null {
   };
 }
 
-function placeCard(hole: Hole, cardW: number, cardH: number): CSSProperties {
+function placeCard(hole: Hole, cardW: number, cardH: number): { top: number; left: number; width: number } {
   const gap = 14;
   const margin = 12;
   const vw = window.innerWidth;
@@ -163,9 +163,10 @@ function placeCard(hole: Hole, cardW: number, cardH: number): CSSProperties {
   const spaceAbove = hole.top - margin;
   const prefer: "right" | "below" | "above" | "left" =
     hole.height > 160 ? "right" : hole.top + hole.height > vh - 80 ? "above" : "below";
-  const sideRank = (side: typeof prefer) => (side === prefer ? 0 : side === "right" || side === "below" ? 1 : 2);
+  const sideRank = (side: "right" | "below" | "above" | "left") =>
+    side === prefer ? 0 : side === "right" || side === "below" ? 1 : 2;
 
-  const slots: { left: number; top: number; room: number; side: typeof prefer }[] = [
+  const slots: { left: number; top: number; room: number; side: "right" | "below" | "above" | "left" }[] = [
     { left: holeRight + gap, top: hole.top, room: Math.min(1, Math.max(0, spaceRight / cardW)), side: "right" },
     { left: holeRight + gap, top: midY, room: Math.min(1, Math.max(0, spaceRight / cardW)), side: "right" },
     { left: holeRight + gap, top: holeBottom - cardH, room: Math.min(1, Math.max(0, spaceRight / cardW)), side: "right" },
@@ -201,17 +202,40 @@ export default function Tutorial(props: {
   const steps = props.steps || TUTORIAL_STEPS;
   const [index, setIndex] = useState(0);
   const [hole, setHole] = useState<Hole | null>(null);
+  const [holeVisible, setHoleVisible] = useState(false);
   const [cardBox, setCardBox] = useState({ w: 340, h: 210 });
+  const [tipPos, setTipPos] = useState<{ top: number; left: number; width: number } | null>(null);
+  const [tipVisible, setTipVisible] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
+  const fadeTimer = useRef(0);
 
   const step = steps[index];
   const last = index === steps.length - 1;
   const allowSkip = props.allowSkip !== false;
 
   useEffect(() => {
-    const measure = () => setHole(measureHole(step.target));
-    measure();
-    const timer = window.setInterval(measure, 120);
+    window.clearTimeout(fadeTimer.current);
+    setHoleVisible(false);
+    setTipVisible(false);
+    fadeTimer.current = window.setTimeout(() => {
+      const next = measureHole(step.target);
+      setHole(next);
+      window.requestAnimationFrame(() => {
+        setHoleVisible(Boolean(next));
+        setTipVisible(true);
+      });
+    }, 90);
+    return () => window.clearTimeout(fadeTimer.current);
+  }, [step.target, index]);
+
+  useEffect(() => {
+    const measure = () => {
+      const next = measureHole(step.target);
+      if (next) {
+        setHole(next);
+      }
+    };
+    const timer = window.setInterval(measure, 160);
     const ro = new ResizeObserver(measure);
     const el = document.querySelector(`[data-tour="${step.target}"]`);
     if (el) {
@@ -234,17 +258,37 @@ export default function Tutorial(props: {
     }
     const { width, height } = el.getBoundingClientRect();
     setCardBox((prev) =>
-      Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1
-        ? prev
-        : { w: width, h: height },
+      Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1 ? prev : { w: width, h: height },
     );
-  }, [index, step.body, hole]);
+  }, [index, step.body, hole, tipVisible]);
+
+  useLayoutEffect(() => {
+    if (!hole) {
+      return;
+    }
+    setTipPos(placeCard(hole, cardBox.w, cardBox.h));
+  }, [hole, cardBox.w, cardBox.h]);
 
   const tipStyle = (): CSSProperties => {
-    if (!hole) {
-      return { top: "50%", left: "50%", transform: "translate(-50%, -50%)" };
+    if (!tipPos) {
+      return {
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        opacity: tipVisible ? 1 : 0,
+      };
     }
-    return placeCard(hole, cardBox.w, cardBox.h);
+    return {
+      top: tipPos.top,
+      left: tipPos.left,
+      width: tipPos.width,
+      opacity: tipVisible ? 1 : 0,
+      transform: tipVisible ? "translateY(0)" : "translateY(6px)",
+    };
+  };
+
+  const go = (next: number) => {
+    setIndex(next);
   };
 
   return (
@@ -252,7 +296,7 @@ export default function Tutorial(props: {
       {!hole && <div className="tour-dim" />}
       {hole && (
         <div
-          className="tour-hole"
+          className={`tour-hole${holeVisible ? " on" : ""}`}
           style={{
             top: hole.top,
             left: hole.left,
@@ -262,14 +306,14 @@ export default function Tutorial(props: {
           }}
         />
       )}
-      <div className="tour-card" ref={cardRef} style={tipStyle()}>
+      <div className={`tour-card${tipVisible ? " on" : ""}`} ref={cardRef} style={tipStyle()}>
         <div className="tour-step">
           {index + 1} / {steps.length}
         </div>
         <h3>{step.title}</h3>
         <p>{step.body}</p>
         <div className="tour-nav">
-          <button className="btn" disabled={index === 0} onClick={() => setIndex((i) => i - 1)}>
+          <button className="btn" disabled={index === 0} onClick={() => go(index - 1)}>
             Previous
           </button>
           {last ? (
@@ -278,7 +322,7 @@ export default function Tutorial(props: {
             </button>
           ) : (
             <>
-              <button className="btn primary" onClick={() => setIndex((i) => i + 1)}>
+              <button className="btn primary" onClick={() => go(index + 1)}>
                 Next
               </button>
               {allowSkip && (

@@ -18,6 +18,7 @@ import {
   listStoredAccounts,
   patchAccount,
   removeAccount,
+  reorderAccounts,
   setSettings,
   touchLastLogin,
   updateLabel,
@@ -70,6 +71,7 @@ function publicAccounts(): AccountPublic[] {
       pid: running ? pid! : null,
       labelIds: a.labelIds || [],
       inactive: Boolean(a.inactive),
+      sortOrder: typeof a.sortOrder === "number" ? a.sortOrder : 0,
     };
   });
 }
@@ -350,6 +352,17 @@ function registerIpc(): void {
   ipcMain.handle("accounts:patch", (_e, id: string, patch: AccountPatch): IpcResult => {
     if (!patchAccount(id, patch)) {
       return fail("Account not found.");
+    }
+    emitAccounts();
+    return ok();
+  });
+
+  ipcMain.handle("accounts:reorder", (_e, orderedIds: string[]): IpcResult => {
+    if (!Array.isArray(orderedIds) || !orderedIds.length) {
+      return fail("Nothing to reorder.");
+    }
+    if (!reorderAccounts(orderedIds)) {
+      return fail("Could not reorder accounts.");
     }
     emitAccounts();
     return ok();

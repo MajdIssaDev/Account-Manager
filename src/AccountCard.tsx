@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import type { MouseEvent, PointerEvent } from "react";
 import type { AccountLabel, AccountPublic } from "../shared/types";
 
 function formatWhen(iso: string | null): string {
@@ -17,10 +17,14 @@ export default function AccountCard(props: {
   labels: AccountLabel[];
   busy: boolean;
   selected: boolean;
+  dragging?: boolean;
+  dropTarget?: boolean;
   error?: string | null;
   onPick: (e: MouseEvent) => void;
   onContextMenu: (e: MouseEvent) => void;
+  onPointerDown: (e: PointerEvent) => void;
   onLaunch: () => void;
+  onSetActive: () => void;
   onFocus: () => void;
   onClose: () => void;
   onRemove: () => void;
@@ -30,13 +34,15 @@ export default function AccountCard(props: {
   const assigned = labels.filter((label) => a.labelIds.includes(label.id));
   return (
     <article
-      className={`card${a.running ? " running" : ""}${selected ? " picked" : ""}`}
+      className={`card${a.running ? " running" : ""}${selected ? " picked" : ""}${props.dragging ? " dragging" : ""}${props.dropTarget ? " drop-target" : ""}`}
+      data-account-id={a.id}
       onClick={(e) => {
         if (e.button !== 0) {
           return;
         }
         props.onPick(e);
       }}
+      onPointerDown={props.onPointerDown}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -54,6 +60,7 @@ export default function AccountCard(props: {
           props.onRemove();
         }}
         onContextMenu={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
       >
         ×
       </button>
@@ -86,7 +93,7 @@ export default function AccountCard(props: {
       </div>
       <div className="meta">{formatWhen(a.lastLoginAt)}</div>
       {error && <p className="error">{error}</p>}
-      <div className="actions" onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>
+      <div className="actions" onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
         {a.running ? (
           <>
             <button className="btn primary" disabled={busy} onClick={props.onFocus}>
@@ -96,6 +103,10 @@ export default function AccountCard(props: {
               Close
             </button>
           </>
+        ) : a.inactive ? (
+          <button className="btn primary" disabled={busy} onClick={props.onSetActive}>
+            Set Active
+          </button>
         ) : (
           <button className="btn primary" disabled={busy} onClick={props.onLaunch}>
             Launch

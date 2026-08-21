@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import type { AccountPublic, AppSettings, UpdateState } from "../shared/types";
 import { DEFAULT_LABELS } from "../shared/types";
 import AddAccountModal from "./AddAccountModal";
@@ -140,27 +140,28 @@ export default function App() {
       }
       return a.labelIds.some((id) => filterLabels.includes(id));
     });
-    const rank = (a: AccountPublic) => {
-      let min = 999;
-      for (const id of a.labelIds) {
-        const i = labels.findIndex((l) => l.id === id);
-        if (i >= 0 && i < min) {
-          min = i;
-        }
-      }
-      return min;
-    };
-    return filtered.sort((a, b) => {
-      const d = rank(a) - rank(b);
-      if (d !== 0) {
-        return d;
-      }
-      return (a.displayName || a.username).localeCompare(b.displayName || b.username);
-    });
-  }, [accounts, filterLabels, showInactive, labels]);
+    return [...filtered].sort(
+      (a, b) =>
+        (a.sortOrder ?? 0) - (b.sortOrder ?? 0) ||
+        (a.displayName || a.username).localeCompare(b.displayName || b.username),
+    );
+  }, [accounts, filterLabels, showInactive]);
 
   const selectedVisible = selectedIds.filter((id) => visible.some((a) => a.id === id));
   const chip = updateChip(update);
+
+  const [dragIds, setDragIds] = useState<string[] | null>(null);
+  const [dropId, setDropId] = useState<string | null>(null);
+  const dragMoved = useRef(false);
+  const dragStart = useRef<{ x: number; y: number; id: string } | null>(null);
+  const dragIdsRef = useRef<string[] | null>(null);
+  const dropIdRef = useRef<string | null>(null);
+  const visibleRef = useRef(visible);
+  const accountsRef = useRef(accounts);
+  const selectedRef = useRef(selectedIds);
+  visibleRef.current = visible;
+  accountsRef.current = accounts;
+  selectedRef.current = selectedIds;
 
   const idleByLabel = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -224,6 +225,128 @@ export default function App() {
     const ids = selectedIds.includes(id) && selectedIds.length > 0 ? selectedIds : [id];
     setMenu({ x: e.clientX, y: e.clientY, ids });
   };
+
+  const contiguousBlockFor = (id: string): string[] | null => {
+    const order = visibleRef.current.map((a) => a.id);
+    const selected = selectedRef.current.filter((x) => order.includes(x));
+    if (selected.includes(id) && selected.length > 1) {
+      const idxs = selected.map((x) => order.indexOf(x)).sort((a, b) => a - b);
+      const contiguous = idxs.every((v, i) => i === 0 || v === idxs[i - 1] + 1);
+      if (contiguous) {
+        return idxs.map((i) => order[i]);
+      }
+      return null;
+    }
+    return [id];
+  };
+
+  const startCardPointer = (id: string, e: PointerEvent) => {
+    if (e.button !== 0 || e.ctrlKey || e.shiftKey) {
+      return;
+    }
+    if ((e.target as HTMLElement).closest("button, .actions, .card-x")) {
+      return;
+    }
+    dragMoved.current = false;
+    dragStart.current = { x: e.clientX, y: e.clientY, id };
+  };
+
+  useEffect(() => {
+    const onMove = (e: globalThis.PointerEvent) => {
+      const start = dragStart.current;
+      if (!start) {
+        return;
+      }
+      const dist = Math.hypot(e.clientX - start.x, e.clientY - start.y);
+      let moving = dragIdsRef.current;
+      if (!moving) {
+        if (dist < 8) {
+          return;
+        }
+        const block = contiguousBlockFor(start.id);
+        if (!block) {
+          dragStart.current = null;
+          show("Select cards that sit next to each other to drag them together.");
+          return;
+        }
+        dragMoved.current = true;
+        skipPickRef.current = true;
+        moving = block;
+        dragIdsRef.current = block;
+        setDragIds(block);
+        if (!selectedRef.current.includes(start.id) || selectedRef.current.length === 1) {
+          setSelectedIds(block);
+          setAnchorId(start.id);
+        }
+      }
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      const card = el?.closest(".card") as HTMLElement | null;
+      const overId = card?.dataset.accountId || null;
+      if (overId && moving && !moving.includes(overId)) {
+        dropIdRef.current = overId;
+        setDropId(overId);
+      } else {
+        dropIdRef.current = null;
+        setDropId(null);
+      }
+    };
+
+    const onUp = () => {
+      const start = dragStart.current;
+      const moving = dragIdsRef.current;
+      const target = dropIdRef.current;
+      const didMove = dragMoved.current;
+      dragStart.current = null;
+      dragIdsRef.current = null;
+      dropIdRef.current = null;
+      setDragIds(null);
+      setDropId(null);
+      if (!start || !moving || !didMove) {
+        return;
+      }
+      window.setTimeout(() => {
+        skipPickRef.current = false;
+      }, 50);
+      if (!target || moving.includes(target)) {
+        return;
+      }
+      void (async () => {
+        const visIds = visibleRef.current.map((a) => a.id);
+        const allIds = [...accountsRef.current]
+          .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+          .map((a) => a.id);
+        const block = moving.filter((id) => visIds.includes(id));
+        if (!block.length) {
+          return;
+        }
+        const without = visIds.filter((id) => !block.includes(id));
+        const targetIdx = without.indexOf(target);
+        if (targetIdx < 0) {
+          return;
+        }
+        const startIdx = Math.min(...block.map((id) => visIds.indexOf(id)));
+        const dropIdxInFullVis = visIds.indexOf(target);
+        const insertAt = dropIdxInFullVis > startIdx ? targetIdx + 1 : targetIdx;
+        without.splice(insertAt, 0, ...block);
+        const visSet = new Set(visIds);
+        let vi = 0;
+        const nextAll = allIds.map((id) => (visSet.has(id) ? without[vi++] : id));
+        const res = await window.ram.reorderAccounts(nextAll);
+        if (!res.ok && res.error) {
+          show(res.error);
+        }
+      })();
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
 
   const targets = (ids: string[]) => accounts.filter((a) => ids.includes(a.id));
 
@@ -539,10 +662,14 @@ export default function App() {
                     labels={labels}
                     busy={busyId === a.id || busyId === "__many__"}
                     selected={selectedIds.includes(a.id)}
+                    dragging={Boolean(dragIds?.includes(a.id))}
+                    dropTarget={dropId === a.id}
                     error={cardErrors[a.id]}
                     onPick={(e) => pick(a.id, e)}
+                    onPointerDown={(e) => startCardPointer(a.id, e)}
                     onContextMenu={(e) => openMenu(a.id, e)}
                     onLaunch={() => run(a.id, () => window.ram.launch(a.id), true)}
+                    onSetActive={() => void setInactiveFor([a.id], false)}
                     onFocus={() => run(a.id, () => window.ram.focus(a.id))}
                     onClose={() => run(a.id, () => window.ram.close(a.id))}
                     onRemove={() => setRemoveIds([a.id])}

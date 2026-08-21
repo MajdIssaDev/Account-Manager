@@ -20,6 +20,8 @@ const api = {
   remove: (id: string): Promise<IpcResult> => ipcRenderer.invoke("accounts:remove", id),
   patchAccount: (id: string, patch: AccountPatch): Promise<IpcResult> =>
     ipcRenderer.invoke("accounts:patch", id, patch),
+  reorderAccounts: (orderedIds: string[]): Promise<IpcResult> =>
+    ipcRenderer.invoke("accounts:reorder", orderedIds),
   launch: (id: string): Promise<IpcResult<{ pid: number }>> =>
     ipcRenderer.invoke("accounts:launch", id),
   launchMany: (ids: string[]): Promise<IpcResult> =>
