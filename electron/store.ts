@@ -2,7 +2,8 @@ import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { app, safeStorage } from "electron";
-import type { AppSettings } from "../shared/types";
+import type { AccountLabel, AccountPatch, AppSettings, ThemeId } from "../shared/types";
+import { DEFAULT_LABELS } from "../shared/types";
 
 export type StoredAccount = {
   id: string;
@@ -13,6 +14,8 @@ export type StoredAccount = {
   cookieEnc: string;
   lastLoginAt: string | null;
   createdAt: string;
+  labelIds: string[];
+  inactive: boolean;
 };
 
 type FileShape = {
@@ -28,6 +31,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoCheckUpdates: true,
   autoDownloadUpdates: true,
   githubToken: "",
+  labels: DEFAULT_LABELS.map((l) => ({ ...l })),
+  themeId: "midnight",
+  tutorialDone: false,
 };
 
 function dataDir(): string {
@@ -39,7 +45,51 @@ function dataFile(): string {
 }
 
 function emptyStore(): FileShape {
-  return { accounts: [], settings: { ...DEFAULT_SETTINGS } };
+  return { accounts: [], settings: { ...DEFAULT_SETTINGS, labels: DEFAULT_LABELS.map((l) => ({ ...l })) } };
+}
+
+function normalizeAccount(raw: StoredAccount): StoredAccount {
+  return {
+    ...raw,
+    labelIds: Array.isArray(raw.labelIds) ? raw.labelIds : [],
+    inactive: Boolean(raw.inactive),
+  };
+}
+
+function normalizeLabels(input: unknown): AccountLabel[] {
+  const list = Array.isArray(input) ? (input as AccountLabel[]) : [];
+  const cleaned = list
+    .filter((l) => l && typeof l.id === "string" && typeof l.name === "string")
+    .map((l) => ({
+      id: l.id,
+      name: String(l.name).trim() || "Label",
+      color: l.color || "#4f6ef7",
+      builtin: Boolean(l.builtin),
+    }));
+  const hasMain = cleaned.some((l) => l.id === "label-main");
+  const hasAlt = cleaned.some((l) => l.id === "label-alt");
+  const next = [...cleaned];
+  if (!hasMain) {
+    next.unshift({ ...DEFAULT_LABELS[0] });
+  }
+  if (!hasAlt) {
+    const alt = { ...DEFAULT_LABELS[1] };
+    const mainIdx = next.findIndex((l) => l.id === "label-main");
+    next.splice(mainIdx + 1, 0, alt);
+  }
+  return next;
+}
+
+function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
+  const merged: AppSettings = { ...DEFAULT_SETTINGS, ...(raw || {}) };
+  merged.labels = normalizeLabels(merged.labels);
+  const themes: ThemeId[] = ["midnight", "ocean", "ember", "forest", "violet", "mono"];
+  if (!themes.includes(merged.themeId)) {
+    merged.themeId = "midnight";
+  }
+  merged.githubToken = merged.githubToken || "";
+  merged.tutorialDone = Boolean(merged.tutorialDone);
+  return merged;
 }
 
 function readRaw(): FileShape {
@@ -50,8 +100,8 @@ function readRaw(): FileShape {
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as FileShape;
     return {
-      accounts: Array.isArray(parsed.accounts) ? parsed.accounts : [],
-      settings: { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) },
+      accounts: Array.isArray(parsed.accounts) ? parsed.accounts.map(normalizeAccount) : [],
+      settings: normalizeSettings(parsed.settings),
     };
   } catch {
     return emptyStore();
@@ -67,7 +117,7 @@ function writeRaw(data: FileShape): void {
 }
 
 export function getSettings(): AppSettings {
-  return { ...DEFAULT_SETTINGS, ...readRaw().settings };
+  return normalizeSettings(readRaw().settings);
 }
 
 export function setSettings(patch: Partial<AppSettings>): AppSettings {
@@ -78,7 +128,10 @@ export function setSettings(patch: Partial<AppSettings>): AppSettings {
       .map((s) => String(s).trim())
       .filter(Boolean);
   }
-  data.settings = next;
+  if (Array.isArray(patch.labels)) {
+    next.labels = normalizeLabels(patch.labels);
+  }
+  data.settings = normalizeSettings(next);
   writeRaw(data);
   return data.settings;
 }
@@ -128,10 +181,72 @@ export function upsertAccount(profile: {
     cookieEnc,
     lastLoginAt: null,
     createdAt: new Date().toISOString(),
+    labelIds: [],
+    inactive: false,
   };
   data.accounts.push(row);
   writeRaw(data);
   return row;
+}
+
+export function patchAccount(id: string, patch: AccountPatch): StoredAccount | undefined {
+  const data = readRaw();
+  const row = data.accounts.find((a) => a.id === id);
+  if (!row) {
+    return undefined;
+  }
+  if (Array.isArray(patch.labelIds)) {
+    const allowed = new Set(data.settings.labels.map((l) => l.id));
+    row.labelIds = patch.labelIds.filter((lid) => allowed.has(lid));
+  }
+  if (typeof patch.inactive === "boolean") {
+    row.inactive = patch.inactive;
+  }
+  writeRaw(data);
+  return row;
+}
+
+export function createLabel(name: string, color: string): AccountLabel {
+  const data = readRaw();
+  const label: AccountLabel = {
+    id: randomUUID(),
+    name: name.trim() || "Label",
+    color: color || "#4f6ef7",
+    builtin: false,
+  };
+  data.settings.labels = normalizeLabels([...data.settings.labels, label]);
+  writeRaw(data);
+  return label;
+}
+
+export function updateLabel(id: string, patch: { name?: string; color?: string }): AccountLabel | undefined {
+  const data = readRaw();
+  const row = data.settings.labels.find((l) => l.id === id);
+  if (!row) {
+    return undefined;
+  }
+  if (typeof patch.name === "string" && patch.name.trim()) {
+    row.name = patch.name.trim();
+  }
+  if (typeof patch.color === "string" && patch.color.trim()) {
+    row.color = patch.color.trim();
+  }
+  writeRaw(data);
+  return row;
+}
+
+export function deleteLabel(id: string): boolean {
+  const data = readRaw();
+  const row = data.settings.labels.find((l) => l.id === id);
+  if (!row || row.builtin) {
+    return false;
+  }
+  data.settings.labels = data.settings.labels.filter((l) => l.id !== id);
+  for (const account of data.accounts) {
+    account.labelIds = account.labelIds.filter((lid) => lid !== id);
+  }
+  writeRaw(data);
+  return true;
 }
 
 export function removeAccount(id: string): boolean {

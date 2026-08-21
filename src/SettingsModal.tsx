@@ -1,5 +1,6 @@
 import { useState } from "react";
-import type { AppSettings, UpdateState } from "../shared/types";
+import type { AppSettings, ThemeId, UpdateState } from "../shared/types";
+import { THEME_PRESETS } from "../shared/types";
 import { GITHUB_LATEST_RELEASE_URL, GITHUB_REPO_SLUG } from "../shared/github";
 
 export default function SettingsModal(props: {
@@ -7,6 +8,7 @@ export default function SettingsModal(props: {
   update: UpdateState | null;
   onClose: () => void;
   onSaved: (s: AppSettings) => void;
+  onReplayTutorial: () => void;
 }) {
   const [robloxPlayerPath, setPath] = useState(props.settings.robloxPlayerPath);
   const [attachOnLaunch, setAttach] = useState(props.settings.attachOnLaunch);
@@ -15,6 +17,7 @@ export default function SettingsModal(props: {
   const [autoCheckUpdates, setAutoCheck] = useState(props.settings.autoCheckUpdates);
   const [autoDownloadUpdates, setAutoDownload] = useState(props.settings.autoDownloadUpdates);
   const [githubToken, setToken] = useState(props.settings.githubToken);
+  const [themeId, setThemeId] = useState<ThemeId>(props.settings.themeId || "midnight");
   const [status, setStatus] = useState<string>("");
   const [checking, setChecking] = useState(false);
 
@@ -27,6 +30,7 @@ export default function SettingsModal(props: {
       autoCheckUpdates,
       autoDownloadUpdates,
       githubToken: githubToken.trim(),
+      themeId,
     });
     props.onSaved(next);
     props.onClose();
@@ -65,6 +69,32 @@ export default function SettingsModal(props: {
           placeholder={`"C:\\Path\\to\\potassium.exe" --attach {pid}`}
         />
         <p className="hint">Placeholders: {"{pid}"} and {"{account}"}.</p>
+
+        <h2 className="modal-section">Appearance</h2>
+        <p className="hint">Color presets apply to the whole app. Click one to preview, then Save.</p>
+        <div className="theme-grid">
+          {THEME_PRESETS.map((theme) => (
+            <button
+              key={theme.id}
+              type="button"
+              className={`theme-card theme-${theme.id}${themeId === theme.id ? " on" : ""}`}
+              onClick={() => {
+                setThemeId(theme.id);
+                document.documentElement.setAttribute("data-theme", theme.id);
+              }}
+            >
+              <span className="theme-preview">
+                <i />
+                <i />
+                <i />
+              </span>
+              {theme.name}
+            </button>
+          ))}
+        </div>
+        <button className="btn" onClick={props.onReplayTutorial}>
+          Replay tutorial
+        </button>
 
         <h2 className="modal-section">Updates</h2>
         <p className="hint">

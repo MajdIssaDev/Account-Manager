@@ -8,12 +8,16 @@ import {
 } from "electron";
 import { CHROME_UA, fetchAuthenticatedUser, normalizeCookie } from "./auth";
 import {
+  createLabel,
+  deleteLabel,
   getAccount,
   getSettings,
   listStoredAccounts,
+  patchAccount,
   removeAccount,
   setSettings,
   touchLastLogin,
+  updateLabel,
   upsertAccount,
 } from "./store";
 import { attachIfRequested, potassiumStatus } from "./potassium";
@@ -29,6 +33,7 @@ import {
   maybeAutoCheck,
 } from "./updater";
 import type {
+  AccountPatch,
   AccountPublic,
   AppSettings,
   IpcResult,
@@ -60,6 +65,8 @@ function publicAccounts(): AccountPublic[] {
       createdAt: a.createdAt,
       running,
       pid: running ? pid! : null,
+      labelIds: a.labelIds || [],
+      inactive: Boolean(a.inactive),
     };
   });
 }
@@ -68,11 +75,15 @@ function emitAccounts(): void {
   mainWindow?.webContents.send("accounts:changed", publicAccounts());
 }
 
+function emitSettings(): void {
+  mainWindow?.webContents.send("settings:changed", getSettings());
+}
+
 function ok<T>(data?: T): IpcResult<T> {
   return { ok: true, data };
 }
 
-function fail(error: string): IpcResult {
+function fail<T = void>(error: string): IpcResult<T> {
   return { ok: false, error };
 }
 
@@ -309,7 +320,41 @@ function registerIpc(): void {
     return ok();
   });
 
-  ipcMain.handle("accounts:launch", async (_e, id: string): Promise<IpcResult<{ pid: number }>> => {
+  ipcMain.handle("accounts:patch", (_e, id: string, patch: AccountPatch): IpcResult => {
+    if (!patchAccount(id, patch)) {
+      return fail("Account not found.");
+    }
+    emitAccounts();
+    return ok();
+  });
+
+  ipcMain.handle("labels:create", (_e, name: string, color: string) => {
+    const label = createLabel(name, color);
+    emitAccounts();
+    emitSettings();
+    return ok(label);
+  });
+
+  ipcMain.handle("labels:update", (_e, id: string, patch: { name?: string; color?: string }) => {
+    const label = updateLabel(id, patch);
+    if (!label) {
+      return fail("Label not found.");
+    }
+    emitAccounts();
+    emitSettings();
+    return ok(label);
+  });
+
+  ipcMain.handle("labels:delete", (_e, id: string): IpcResult => {
+    if (!deleteLabel(id)) {
+      return fail("That label cannot be deleted.");
+    }
+    emitAccounts();
+    emitSettings();
+    return ok();
+  });
+
+  const launchOne = async (id: string): Promise<IpcResult<{ pid: number }>> => {
     const row = getAccount(id);
     if (!row) {
       return fail("Account not found.");
@@ -331,6 +376,28 @@ function registerIpc(): void {
     } catch (err) {
       return fail(err instanceof Error ? err.message : String(err));
     }
+  };
+
+  ipcMain.handle("accounts:launch", (_e, id: string) => launchOne(id));
+
+  ipcMain.handle("accounts:launchMany", async (_e, ids: string[]) => {
+    const results: { id: string; ok: boolean; error?: string }[] = [];
+    for (const id of ids) {
+      const res = await launchOne(id);
+      results.push({ id, ok: res.ok, error: res.error });
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length && failed.length === results.length) {
+      return fail(failed[0]?.error || "Could not launch selected accounts.");
+    }
+    if (failed.length) {
+      mainWindow?.webContents.send(
+        "toast",
+        `Launched ${results.length - failed.length}, ${failed.length} failed.`,
+      );
+    }
+    return ok(results);
   });
 
   ipcMain.handle("accounts:close", async (_e, id: string): Promise<IpcResult> => {
@@ -363,6 +430,7 @@ function registerIpc(): void {
   ipcMain.handle("settings:set", (_e, patch: Partial<AppSettings>) => {
     const next = setSettings(patch);
     emitAccounts();
+    emitSettings();
     return next;
   });
   ipcMain.handle("potassium:status", () => potassiumStatus());
