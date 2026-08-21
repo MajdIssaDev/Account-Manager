@@ -1024,15 +1024,42 @@ textarea:focus {
   box-shadow: 0 0 0 1px var(--accent);
 }
 
-.card.dragging {
-  opacity: 0.45;
-  transform: scale(0.98);
+.card.floating {
+  margin: 0;
+  height: auto;
+  cursor: grabbing;
+  box-shadow:
+    0 16px 36px rgba(0, 0, 0, 0.45),
+    0 0 0 1px var(--accent);
+  transform: scale(1.02);
+}
+
+.card-slot {
+  min-height: 160px;
+  border: 1px dashed var(--line-hot);
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.08);
+  pointer-events: none;
+}
+
+.grid.dragging-grid {
   cursor: grabbing;
 }
 
-.card.drop-target {
-  border-color: var(--accent-cyan);
-  box-shadow: 0 0 0 1px var(--accent-cyan);
+.drag-float {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 60;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.drag-float-item {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
 }
 
 .card-labels {

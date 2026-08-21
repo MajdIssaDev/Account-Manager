@@ -17,8 +17,7 @@ export default function AccountCard(props: {
   labels: AccountLabel[];
   busy: boolean;
   selected: boolean;
-  dragging?: boolean;
-  dropTarget?: boolean;
+  floating?: boolean;
   error?: string | null;
   onPick: (e: MouseEvent) => void;
   onContextMenu: (e: MouseEvent) => void;
@@ -34,16 +33,21 @@ export default function AccountCard(props: {
   const assigned = labels.filter((label) => a.labelIds.includes(label.id));
   return (
     <article
-      className={`card${a.running ? " running" : ""}${selected ? " picked" : ""}${props.dragging ? " dragging" : ""}${props.dropTarget ? " drop-target" : ""}`}
+      className={`card${a.running ? " running" : ""}${selected ? " picked" : ""}${props.floating ? " floating" : ""}`}
       data-account-id={a.id}
+      data-slot-id={a.id}
       onClick={(e) => {
-        if (e.button !== 0) {
+        if (props.floating || e.button !== 0) {
           return;
         }
         props.onPick(e);
       }}
-      onPointerDown={props.onPointerDown}
+      onPointerDown={props.floating ? undefined : props.onPointerDown}
       onContextMenu={(e) => {
+        if (props.floating) {
+          e.preventDefault();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         props.onContextMenu(e);

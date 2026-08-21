@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent } from "react";
 import type { AccountPublic, AppSettings, UpdateState } from "../shared/types";
 import { DEFAULT_LABELS } from "../shared/types";
 import AddAccountModal from "./AddAccountModal";
@@ -151,17 +151,28 @@ export default function App() {
   const chip = updateChip(update);
 
   const [dragIds, setDragIds] = useState<string[] | null>(null);
-  const [dropId, setDropId] = useState<string | null>(null);
+  const [previewOrder, setPreviewOrder] = useState<string[] | null>(null);
+  const [floatSize, setFloatSize] = useState<{ w: number; h: number } | null>(null);
   const dragMoved = useRef(false);
   const dragStart = useRef<{ x: number; y: number; id: string } | null>(null);
   const dragIdsRef = useRef<string[] | null>(null);
-  const dropIdRef = useRef<string | null>(null);
+  const previewRef = useRef<string[] | null>(null);
+  const floatOffset = useRef({ x: 0, y: 0 });
+  const floatElRef = useRef<HTMLDivElement>(null);
+  const previewRaf = useRef(0);
+  const gridRef = useRef<HTMLDivElement>(null);
   const visibleRef = useRef(visible);
   const accountsRef = useRef(accounts);
   const selectedRef = useRef(selectedIds);
   visibleRef.current = visible;
   accountsRef.current = accounts;
   selectedRef.current = selectedIds;
+
+  const displayList = useMemo(() => {
+    const order = previewOrder || visible.map((a) => a.id);
+    const byId = new Map(visible.map((a) => [a.id, a]));
+    return order.map((id) => byId.get(id)).filter(Boolean) as AccountPublic[];
+  }, [visible, previewOrder]);
 
   const idleByLabel = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -240,6 +251,45 @@ export default function App() {
     return [id];
   };
 
+  const buildPreview = (block: string[], clientX: number, clientY: number): string[] => {
+    const visIds = visibleRef.current.map((a) => a.id);
+    const without = visIds.filter((id) => !block.includes(id));
+    if (!without.length) {
+      return [...block];
+    }
+    const grid = gridRef.current;
+    let insertAt = without.length;
+    if (grid) {
+      const slots = Array.from(grid.querySelectorAll<HTMLElement>("[data-slot-id]"));
+      let best = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < slots.length; i++) {
+        const id = slots[i].dataset.slotId;
+        if (!id || block.includes(id)) {
+          continue;
+        }
+        const r = slots[i].getBoundingClientRect();
+        const cx = r.left + r.width / 2;
+        const cy = r.top + r.height / 2;
+        const d = Math.hypot(clientX - cx, clientY - cy);
+        if (d < best) {
+          best = d;
+          const idx = without.indexOf(id);
+          if (idx < 0) {
+            continue;
+          }
+          insertAt = clientX < cx || (Math.abs(clientX - cx) < 12 && clientY < cy) ? idx : idx + 1;
+        }
+      }
+      if (slots.length === 0) {
+        insertAt = 0;
+      }
+    }
+    insertAt = Math.max(0, Math.min(without.length, insertAt));
+    const next = [...without];
+    next.splice(insertAt, 0, ...block);
+    return next;
+  };
+
   const startCardPointer = (id: string, e: PointerEvent) => {
     if (e.button !== 0 || e.ctrlKey || e.shiftKey) {
       return;
@@ -248,8 +298,53 @@ export default function App() {
       return;
     }
     dragMoved.current = false;
+    const card = (e.currentTarget as HTMLElement).closest(".card") as HTMLElement | null;
+    const rect = card?.getBoundingClientRect();
+    floatOffset.current = rect
+      ? { x: e.clientX - rect.left, y: e.clientY - rect.top }
+      : { x: 40, y: 24 };
+    if (rect) {
+      setFloatSize({ w: rect.width, h: rect.height });
+    }
     dragStart.current = { x: e.clientX, y: e.clientY, id };
   };
+
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    if (!grid || !previewOrder) {
+      return;
+    }
+    const nodes = Array.from(grid.querySelectorAll<HTMLElement>("[data-slot-id]"));
+    const first = new Map<string, DOMRect>();
+    for (const node of nodes) {
+      const id = node.dataset.slotId;
+      if (id) {
+        first.set(id, node.getBoundingClientRect());
+      }
+    }
+    return () => {
+      for (const node of Array.from(grid.querySelectorAll<HTMLElement>("[data-slot-id]"))) {
+        const id = node.dataset.slotId;
+        if (!id) {
+          continue;
+        }
+        const prev = first.get(id);
+        if (!prev) {
+          continue;
+        }
+        const next = node.getBoundingClientRect();
+        const dx = prev.left - next.left;
+        const dy = prev.top - next.top;
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+          continue;
+        }
+        node.animate(
+          [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0, 0)" }],
+          { duration: 160, easing: "ease-out" },
+        );
+      }
+    };
+  }, [previewOrder]);
 
   useEffect(() => {
     const onMove = (e: globalThis.PointerEvent) => {
@@ -274,63 +369,69 @@ export default function App() {
         moving = block;
         dragIdsRef.current = block;
         setDragIds(block);
+        const fx = e.clientX - floatOffset.current.x;
+        const fy = e.clientY - floatOffset.current.y;
+        window.requestAnimationFrame(() => {
+          if (floatElRef.current) {
+            floatElRef.current.style.transform = `translate3d(${fx}px, ${fy}px, 0)`;
+          }
+        });
         if (!selectedRef.current.includes(start.id) || selectedRef.current.length === 1) {
           setSelectedIds(block);
           setAnchorId(start.id);
         }
       }
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      const card = el?.closest(".card") as HTMLElement | null;
-      const overId = card?.dataset.accountId || null;
-      if (overId && moving && !moving.includes(overId)) {
-        dropIdRef.current = overId;
-        setDropId(overId);
-      } else {
-        dropIdRef.current = null;
-        setDropId(null);
+      const nextOrder = buildPreview(moving, e.clientX, e.clientY);
+      previewRef.current = nextOrder;
+      const fx = e.clientX - floatOffset.current.x;
+      const fy = e.clientY - floatOffset.current.y;
+      if (floatElRef.current) {
+        floatElRef.current.style.transform = `translate3d(${fx}px, ${fy}px, 0)`;
+      }
+      if (!previewRaf.current) {
+        previewRaf.current = window.requestAnimationFrame(() => {
+          previewRaf.current = 0;
+          if (previewRef.current) {
+            setPreviewOrder([...previewRef.current]);
+          }
+        });
       }
     };
 
     const onUp = () => {
       const start = dragStart.current;
       const moving = dragIdsRef.current;
-      const target = dropIdRef.current;
+      const order = previewRef.current;
       const didMove = dragMoved.current;
       dragStart.current = null;
       dragIdsRef.current = null;
-      dropIdRef.current = null;
+      previewRef.current = null;
+      if (previewRaf.current) {
+        window.cancelAnimationFrame(previewRaf.current);
+        previewRaf.current = 0;
+      }
       setDragIds(null);
-      setDropId(null);
-      if (!start || !moving || !didMove) {
+      setPreviewOrder(null);
+      setFloatSize(null);
+      if (!start || !moving || !didMove || !order) {
         return;
       }
       window.setTimeout(() => {
         skipPickRef.current = false;
       }, 50);
-      if (!target || moving.includes(target)) {
-        return;
-      }
       void (async () => {
         const visIds = visibleRef.current.map((a) => a.id);
+        const same =
+          order.length === visIds.length && order.every((id, i) => id === visIds[i]);
+        if (same) {
+          return;
+        }
         const allIds = [...accountsRef.current]
           .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
           .map((a) => a.id);
-        const block = moving.filter((id) => visIds.includes(id));
-        if (!block.length) {
-          return;
-        }
-        const without = visIds.filter((id) => !block.includes(id));
-        const targetIdx = without.indexOf(target);
-        if (targetIdx < 0) {
-          return;
-        }
-        const startIdx = Math.min(...block.map((id) => visIds.indexOf(id)));
-        const dropIdxInFullVis = visIds.indexOf(target);
-        const insertAt = dropIdxInFullVis > startIdx ? targetIdx + 1 : targetIdx;
-        without.splice(insertAt, 0, ...block);
         const visSet = new Set(visIds);
         let vi = 0;
-        const nextAll = allIds.map((id) => (visSet.has(id) ? without[vi++] : id));
+        const nextAll = allIds.map((id) => (visSet.has(id) ? order[vi++] : id));
         const res = await window.ram.reorderAccounts(nextAll);
         if (!res.ok && res.error) {
           show(res.error);
@@ -654,30 +755,82 @@ export default function App() {
                 </p>
               </div>
             ) : (
-              <div className="grid">
-                {visible.map((a) => (
-                  <AccountCard
-                    key={a.id}
-                    account={a}
-                    labels={labels}
-                    busy={busyId === a.id || busyId === "__many__"}
-                    selected={selectedIds.includes(a.id)}
-                    dragging={Boolean(dragIds?.includes(a.id))}
-                    dropTarget={dropId === a.id}
-                    error={cardErrors[a.id]}
-                    onPick={(e) => pick(a.id, e)}
-                    onPointerDown={(e) => startCardPointer(a.id, e)}
-                    onContextMenu={(e) => openMenu(a.id, e)}
-                    onLaunch={() => run(a.id, () => window.ram.launch(a.id), true)}
-                    onSetActive={() => void setInactiveFor([a.id], false)}
-                    onFocus={() => run(a.id, () => window.ram.focus(a.id))}
-                    onClose={() => run(a.id, () => window.ram.close(a.id))}
-                    onRemove={() => setRemoveIds([a.id])}
-                  />
-                ))}
+              <div className={`grid${dragIds ? " dragging-grid" : ""}`} ref={gridRef}>
+                {displayList.map((a) => {
+                  const isLifted = Boolean(dragIds?.includes(a.id));
+                  if (isLifted) {
+                    return (
+                      <div
+                        key={a.id}
+                        className="card-slot"
+                        data-slot-id={a.id}
+                        style={floatSize ? { minHeight: floatSize.h } : undefined}
+                      />
+                    );
+                  }
+                  return (
+                    <AccountCard
+                      key={a.id}
+                      account={a}
+                      labels={labels}
+                      busy={busyId === a.id || busyId === "__many__"}
+                      selected={selectedIds.includes(a.id)}
+                      error={cardErrors[a.id]}
+                      onPick={(e) => pick(a.id, e)}
+                      onPointerDown={(e) => startCardPointer(a.id, e)}
+                      onContextMenu={(e) => openMenu(a.id, e)}
+                      onLaunch={() => run(a.id, () => window.ram.launch(a.id), true)}
+                      onSetActive={() => void setInactiveFor([a.id], false)}
+                      onFocus={() => run(a.id, () => window.ram.focus(a.id))}
+                      onClose={() => run(a.id, () => window.ram.close(a.id))}
+                      onRemove={() => setRemoveIds([a.id])}
+                    />
+                  );
+                })}
               </div>
             )}
           </div>
+          {dragIds && floatSize ? (
+            <div
+              className="drag-float"
+              ref={floatElRef}
+              style={{
+                width: floatSize.w,
+                transform: "translate3d(-9999px, -9999px, 0)",
+              }}
+            >
+              {dragIds.map((id, i) => {
+                const a = visible.find((row) => row.id === id) || accounts.find((row) => row.id === id);
+                if (!a) {
+                  return null;
+                }
+                return (
+                  <div
+                    key={id}
+                    className="drag-float-item"
+                    style={{ transform: `translate(${i * 6}px, ${i * 6}px)` }}
+                  >
+                    <AccountCard
+                      account={a}
+                      labels={labels}
+                      busy={false}
+                      selected
+                      floating
+                      error={null}
+                      onPick={() => undefined}
+                      onPointerDown={() => undefined}
+                      onContextMenu={() => undefined}
+                      onLaunch={() => undefined}
+                      onSetActive={() => undefined}
+                      onFocus={() => undefined}
+                      onClose={() => undefined}
+                      onRemove={() => undefined}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
           {selectedVisible.length > 0 || tourOpen ? (
             <div className="launch-bar" data-tour="launch-selected">
               <span>
