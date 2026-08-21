@@ -387,9 +387,10 @@ select {
   text-align: left;
   max-width: 420px;
   padding: 16px 18px;
-  border: 1px dashed var(--line);
+  border: 1px dashed var(--line-hot);
   border-radius: 12px;
-  background: rgba(21, 27, 42, 0.7);
+  background: var(--bg-card);
+  box-shadow: var(--shadow);
 }
 
 .empty h3 {
@@ -933,6 +934,7 @@ textarea:focus {
 }
 
 .main {
+  position: relative;
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -950,15 +952,21 @@ textarea:focus {
 }
 
 .launch-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  width: min(520px, calc(100% - 24px));
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--line);
+  border: 1px solid var(--line-hot);
+  border-radius: 12px;
   background: var(--bg-elev);
-  position: sticky;
-  top: 0;
-  z-index: 3;
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
+  z-index: 5;
 }
 
 .launch-bar span {
@@ -1260,14 +1268,18 @@ textarea:focus {
 
 .ctx-list.nested {
   position: absolute;
-  left: calc(100% - 4px);
-  top: -4px;
-  min-width: 168px;
+  left: 100%;
+  top: 0;
+  min-width: 196px;
   background: var(--modal-bg);
   border: 1px solid var(--line-hot);
   border-radius: 10px;
   padding: 4px;
   box-shadow: var(--shadow);
+}
+
+.ctx-list.nested .ctx-item {
+  border-radius: 7px;
 }
 
 .ctx-item {

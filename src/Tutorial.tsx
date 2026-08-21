@@ -45,12 +45,12 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "cards",
     title: "Account cards",
-    body: "Click a card to select it. Ctrl+click adds or removes one. Shift+click selects from the last card to this one, left-to-right then top-to-bottom. Right-click for labels, inactive, launch, and remove.",
+    body: "Click a card to select it. Ctrl+click adds or removes one. Shift+click selects a range, left-to-right then top-to-bottom. Right-click opens actions without changing the selection.",
   },
   {
     target: "launch-selected",
     title: "Launch selected",
-    body: "When several cards are selected, Launch selected appears here. Right-click the selection for labels, inactive/active, and remove. Remove always asks you to confirm first.",
+    body: "When several cards are selected, a Launch selected bar floats over the bottom of the grid so the cards do not jump. Right-click the selection for labels, inactive/active, and remove.",
   },
   {
     target: "help",

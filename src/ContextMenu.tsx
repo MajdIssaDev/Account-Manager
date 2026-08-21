@@ -8,6 +8,7 @@ export type CtxItem =
       disabled?: boolean;
       danger?: boolean;
       checked?: boolean;
+      keepOpen?: boolean;
       children?: CtxItem[];
       onClick?: () => void;
     };
@@ -40,7 +41,9 @@ function MenuList(props: {
                   return;
                 }
                 item.onClick?.();
-                props.onClose();
+                if (!item.keepOpen) {
+                  props.onClose();
+                }
               }}
             >
               <span className="ctx-check">{item.checked ? "✓" : ""}</span>
@@ -75,7 +78,7 @@ export default function ContextMenu(props: {
     const left = Math.min(props.x, window.innerWidth - r.width - 8);
     const top = Math.min(props.y, window.innerHeight - r.height - 8);
     setPos({ left: Math.max(8, left), top: Math.max(8, top) });
-  }, [props.x, props.y, props.items]);
+  }, [props.x, props.y]);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {

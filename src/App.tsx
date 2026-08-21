@@ -192,10 +192,6 @@ export default function App() {
     e.preventDefault();
     e.stopPropagation();
     const ids = selectedIds.includes(id) && selectedIds.length > 0 ? selectedIds : [id];
-    if (!selectedIds.includes(id)) {
-      setSelectedIds([id]);
-      setAnchorId(id);
-    }
     setMenu({ x: e.clientX, y: e.clientY, ids });
   };
 
@@ -254,6 +250,7 @@ export default function App() {
         type: "item" as const,
         label: label.name,
         checked: n > 0 && rows.every((a) => a.labelIds.includes(label.id)),
+        keepOpen: true,
         onClick: () => void addLabelTo(ids, label.id),
       })),
       { type: "sep" as const },
@@ -268,6 +265,7 @@ export default function App() {
       .map((label) => ({
         type: "item" as const,
         label: label.name,
+        keepOpen: true,
         onClick: () => void removeLabelFrom(ids, label.id),
       }));
     const items: CtxItem[] = [
@@ -448,26 +446,6 @@ export default function App() {
           onDelete={(id) => void window.ram.deleteLabel(id)}
         />
         <div className="main">
-          {selectedVisible.length > 0 || tourOpen ? (
-            <div className="launch-bar" data-tour="launch-selected">
-              <span>
-                {selectedVisible.length} selected
-                {showInactive ? " · inactive view" : ""}
-              </span>
-              <button className="btn" onClick={() => setSelectedIds([])}>
-                Clear
-              </button>
-              <button
-                className="btn primary"
-                disabled={busyId === "__many__" || selectedVisible.length === 0}
-                onClick={() =>
-                  run("__many__", () => window.ram.launchMany(selectedVisible), false)
-                }
-              >
-                Launch selected
-              </button>
-            </div>
-          ) : null}
           <div
             className="cards-stage"
             data-tour="cards"
@@ -514,6 +492,26 @@ export default function App() {
               </div>
             )}
           </div>
+          {selectedVisible.length > 0 || tourOpen ? (
+            <div className="launch-bar" data-tour="launch-selected">
+              <span>
+                {selectedVisible.length} selected
+                {showInactive ? " · inactive view" : ""}
+              </span>
+              <button className="btn" onClick={() => setSelectedIds([])}>
+                Clear
+              </button>
+              <button
+                className="btn primary"
+                disabled={busyId === "__many__" || selectedVisible.length === 0}
+                onClick={() =>
+                  run("__many__", () => window.ram.launchMany(selectedVisible), false)
+                }
+              >
+                Launch selected
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
 
