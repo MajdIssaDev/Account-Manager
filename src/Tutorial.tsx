@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 export type TutorialStep = {
   target: string;
@@ -67,6 +67,36 @@ type Hole = {
   radius: string;
 };
 
+const COMPACT_TARGETS = new Set([
+  "attach",
+  "updates",
+  "help",
+  "settings",
+  "add-account",
+  "create-label",
+  "inactive",
+  "launch-selected",
+]);
+
+function holePad(target: string): number {
+  if (target === "attach") {
+    return 12;
+  }
+  if (COMPACT_TARGETS.has(target)) {
+    return 8;
+  }
+  return 0;
+}
+
+function overlapArea(
+  a: { left: number; top: number; width: number; height: number },
+  b: { left: number; top: number; width: number; height: number },
+): number {
+  const x = Math.max(0, Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left));
+  const y = Math.max(0, Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top));
+  return x * y;
+}
+
 function measureHole(target: string): Hole | null {
   const el = document.querySelector(`[data-tour="${target}"]`);
   if (!(el instanceof HTMLElement)) {
@@ -75,10 +105,11 @@ function measureHole(target: string): Hole | null {
   const r = el.getBoundingClientRect();
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  let left = r.left;
-  let top = r.top;
-  let right = r.right;
-  let bottom = r.bottom;
+  const pad = holePad(target);
+  let left = r.left - pad;
+  let top = r.top - pad;
+  let right = r.right + pad;
+  let bottom = r.bottom + pad;
   let radius = getComputedStyle(el).borderRadius || "0px";
 
   if (target === "cards") {
@@ -93,6 +124,8 @@ function measureHole(target: string): Hole | null {
     right = r.right;
     bottom = vh;
     radius = "0px";
+  } else if (pad > 0 && (!radius || radius === "0px")) {
+    radius = "8px";
   }
 
   left = Math.max(0, Math.round(left));
@@ -109,6 +142,57 @@ function measureHole(target: string): Hole | null {
   };
 }
 
+function placeCard(hole: Hole, cardW: number, cardH: number): CSSProperties {
+  const gap = 14;
+  const margin = 12;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const maxLeft = Math.max(margin, vw - cardW - margin);
+  const maxTop = Math.max(margin, vh - cardH - margin);
+  const clampPos = (left: number, top: number) => ({
+    left: Math.min(Math.max(margin, left), maxLeft),
+    top: Math.min(Math.max(margin, top), maxTop),
+  });
+
+  const holeRight = hole.left + hole.width;
+  const holeBottom = hole.top + hole.height;
+  const midY = hole.top + hole.height / 2 - cardH / 2;
+  const spaceRight = vw - holeRight - margin;
+  const spaceLeft = hole.left - margin;
+  const spaceBelow = vh - holeBottom - margin;
+  const spaceAbove = hole.top - margin;
+  const prefer: "right" | "below" | "above" | "left" =
+    hole.height > 160 ? "right" : hole.top + hole.height > vh - 80 ? "above" : "below";
+  const sideRank = (side: typeof prefer) => (side === prefer ? 0 : side === "right" || side === "below" ? 1 : 2);
+
+  const slots: { left: number; top: number; room: number; side: typeof prefer }[] = [
+    { left: holeRight + gap, top: hole.top, room: Math.min(1, Math.max(0, spaceRight / cardW)), side: "right" },
+    { left: holeRight + gap, top: midY, room: Math.min(1, Math.max(0, spaceRight / cardW)), side: "right" },
+    { left: holeRight + gap, top: holeBottom - cardH, room: Math.min(1, Math.max(0, spaceRight / cardW)), side: "right" },
+    { left: hole.left, top: holeBottom + gap, room: Math.min(1, Math.max(0, spaceBelow / cardH)), side: "below" },
+    { left: holeRight - cardW, top: holeBottom + gap, room: Math.min(1, Math.max(0, spaceBelow / cardH)), side: "below" },
+    { left: hole.left, top: hole.top - cardH - gap, room: Math.min(1, Math.max(0, spaceAbove / cardH)), side: "above" },
+    { left: holeRight - cardW, top: hole.top - cardH - gap, room: Math.min(1, Math.max(0, spaceAbove / cardH)), side: "above" },
+    { left: hole.left - cardW - gap, top: hole.top, room: Math.min(1, Math.max(0, spaceLeft / cardW)), side: "left" },
+    { left: hole.left - cardW - gap, top: midY, room: Math.min(1, Math.max(0, spaceLeft / cardW)), side: "left" },
+  ];
+
+  let best = clampPos(holeRight + gap, hole.top);
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const slot of slots) {
+    const p = clampPos(slot.left, slot.top);
+    const overlap = overlapArea({ ...p, width: cardW, height: cardH }, hole);
+    const score = (1 - slot.room) * 2_000_000 + sideRank(slot.side) * 1_000 + overlap;
+    if (score < bestScore) {
+      best = p;
+      bestScore = score;
+    }
+  }
+
+  return { top: best.top, left: best.left, width: cardW };
+}
+
 export default function Tutorial(props: {
   steps?: TutorialStep[];
   allowSkip?: boolean;
@@ -117,6 +201,8 @@ export default function Tutorial(props: {
   const steps = props.steps || TUTORIAL_STEPS;
   const [index, setIndex] = useState(0);
   const [hole, setHole] = useState<Hole | null>(null);
+  const [cardBox, setCardBox] = useState({ w: 340, h: 210 });
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const step = steps[index];
   const last = index === steps.length - 1;
@@ -141,26 +227,24 @@ export default function Tutorial(props: {
     };
   }, [step.target]);
 
+  useLayoutEffect(() => {
+    const el = cardRef.current;
+    if (!el) {
+      return;
+    }
+    const { width, height } = el.getBoundingClientRect();
+    setCardBox((prev) =>
+      Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1
+        ? prev
+        : { w: width, h: height },
+    );
+  }, [index, step.body, hole]);
+
   const tipStyle = (): CSSProperties => {
     if (!hole) {
       return { top: "50%", left: "50%", transform: "translate(-50%, -50%)" };
     }
-    const gap = 12;
-    const cardW = Math.min(340, window.innerWidth - 24);
-    const cardH = 200;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    if (hole.width > 280 && hole.height > 220) {
-      return {
-        top: Math.min(hole.top + 16, vh - cardH - 12),
-        left: Math.min(Math.max(hole.left + 16, 12), vw - cardW - 12),
-        width: cardW,
-      };
-    }
-    const below = hole.top + hole.height + gap;
-    const top = vh - below > cardH + 16 ? below : Math.max(12, hole.top - cardH - gap);
-    const left = Math.min(Math.max(12, hole.left), vw - cardW - 12);
-    return { top, left, width: cardW };
+    return placeCard(hole, cardBox.w, cardBox.h);
   };
 
   return (
@@ -178,7 +262,7 @@ export default function Tutorial(props: {
           }}
         />
       )}
-      <div className="tour-card" style={tipStyle()}>
+      <div className="tour-card" ref={cardRef} style={tipStyle()}>
         <div className="tour-step">
           {index + 1} / {steps.length}
         </div>
