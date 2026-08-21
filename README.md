@@ -73,16 +73,6 @@ If the ticket fails, the error is shown on the card. The app does not fall back 
 
 This app does **not** kill Roblox’s single-instance mutex. Multiple clients only work if you already run more than one `RobloxPlayerBeta.exe`. The manager just tracks PIDs.
 
-## Potassium attach (optional)
-
-Settings:
-
-- checkbox: attach on launch if Potassium is running
-- process name list (default `Potassium.exe`)
-- attach command, e.g. `"C:\Path\to\potassium.exe" --attach {pid}`
-
-Placeholders: `{pid}`, `{account}`. If the command is empty, launch still works and you get a reminder to set it. The app does not inject into Potassium.
-
 ## Security
 
 Session cookies never go to the renderer. WebView partitions are discarded after add succeeds or you cancel. No telemetry.
