@@ -131,7 +131,10 @@ export default function SettingsModal(props: {
               });
               setChecking(true);
               try {
-                await window.ram.checkUpdates();
+                const checked = await window.ram.checkUpdates();
+                if (checked.status === "available") {
+                  await window.ram.downloadUpdate();
+                }
               } finally {
                 setChecking(false);
               }

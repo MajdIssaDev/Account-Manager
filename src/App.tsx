@@ -98,15 +98,28 @@ export default function App() {
           className={`ver-chip ${chip.kind}`}
           title={update?.message || "Check for updates"}
           onClick={() => {
-            if (update?.status === "ready") {
-              void window.ram.installUpdate();
-              return;
-            }
-            if (update?.status === "available") {
-              void window.ram.downloadUpdate();
-              return;
-            }
-            void window.ram.checkUpdates();
+            void (async () => {
+              if (update?.status === "ready" || update?.status === "available") {
+                const next = await window.ram.downloadUpdate();
+                setUpdate(next);
+                show(next.message);
+                return;
+              }
+              setUpdate((prev) =>
+                prev
+                  ? { ...prev, status: "checking", message: "Checking GitHub…" }
+                  : prev,
+              );
+              const checked = await window.ram.checkUpdates();
+              setUpdate(checked);
+              if (checked.status === "available" || checked.status === "error") {
+                const next = await window.ram.downloadUpdate();
+                setUpdate(next);
+                show(next.message);
+                return;
+              }
+              show(checked.message);
+            })();
           }}
         >
           {chip.label}

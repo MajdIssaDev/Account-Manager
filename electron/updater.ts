@@ -1,3 +1,8 @@
+import { execFile } from "child_process";
+import { writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { promisify } from "util";
 import { app, BrowserWindow, shell } from "electron";
 import { autoUpdater } from "electron-updater";
 import type { UpdateState } from "../shared/types";
@@ -9,6 +14,8 @@ import {
 } from "../shared/github";
 import { getSettings } from "./store";
 
+const execFileAsync = promisify(execFile);
+
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
 autoUpdater.allowPrerelease = false;
@@ -16,6 +23,9 @@ autoUpdater.allowPrerelease = false;
 let mainWindow: BrowserWindow | null = null;
 let lastInfoVersion: string | null = null;
 let lastDownloadUrl: string | null = null;
+let lastAssetId: number | null = null;
+let lastAssetName = "Account-Manager-Setup.exe";
+let checking = false;
 
 const state: UpdateState = {
   currentVersion: app.getVersion(),
@@ -44,32 +54,60 @@ export function canInstallUpdates(): boolean {
   return app.isPackaged && !process.env.PORTABLE_EXECUTABLE_DIR;
 }
 
-function githubHeaders(): Record<string, string> {
+async function ghAuthToken(): Promise<string> {
+  for (const bin of ["gh.cmd", "gh.exe", "gh"]) {
+    try {
+      const { stdout } = await execFileAsync(bin, ["auth", "token"], {
+        windowsHide: true,
+        timeout: 8000,
+      });
+      const token = stdout.trim();
+      if (token) {
+        return token;
+      }
+    } catch {
+      /* try next */
+    }
+  }
+  return "";
+}
+
+async function resolveGithubToken(): Promise<string> {
+  const fromSettings = getSettings().githubToken?.trim() || "";
+  if (fromSettings) {
+    return fromSettings;
+  }
+  const fromEnv = (process.env.GH_TOKEN || process.env.GITHUB_TOKEN || "").trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+  return ghAuthToken();
+}
+
+function githubHeaders(token: string): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "User-Agent": "Account-Manager",
     "X-GitHub-Api-Version": "2022-11-28",
   };
-  const token =
-    getSettings().githubToken?.trim() ||
-    process.env.GH_TOKEN ||
-    process.env.GITHUB_TOKEN ||
-    "";
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
   return headers;
 }
 
-function applyFeed(): void {
-  const token = getSettings().githubToken?.trim() || process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
-  autoUpdater.setFeedURL({
-    provider: "github",
-    owner: GITHUB_OWNER,
-    repo: GITHUB_REPO,
-    private: true,
-    ...(token ? { token } : {}),
-  });
+function applyFeed(token: string): void {
+  try {
+    autoUpdater.setFeedURL({
+      provider: "github",
+      owner: GITHUB_OWNER,
+      repo: GITHUB_REPO,
+      private: true,
+      ...(token ? { token } : {}),
+    });
+  } catch {
+    /* GitHub REST download is the primary path */
+  }
 }
 
 function compareVersions(a: string, b: string): number {
@@ -99,32 +137,37 @@ function markUpToDate(latest: string): void {
   emit();
 }
 
-function markAvailable(latest: string, downloadUrl: string | null): void {
+function markAvailable(latest: string, downloadUrl: string | null, assetId: number | null, assetName: string): void {
   lastInfoVersion = latest;
   lastDownloadUrl = downloadUrl;
+  lastAssetId = assetId;
+  lastAssetName = assetName;
   state.status = "available";
   state.latestVersion = latest;
   state.percent = 0;
-  state.canInstall = canInstallUpdates();
+  state.canInstall = true;
   state.downloadUrl = downloadUrl;
-  state.message = state.canInstall
-    ? `Version ${latest} is available on GitHub.`
-    : `Version ${latest} is available. Get the new installer from GitHub Releases.`;
+  state.message = `Version ${latest} is available. Click to install.`;
   emit();
 }
 
-async function fetchGithubLatest(): Promise<{ version: string; downloadUrl: string | null }> {
+async function fetchGithubLatest(token: string): Promise<{
+  version: string;
+  downloadUrl: string | null;
+  assetId: number | null;
+  assetName: string;
+}> {
   const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO_SLUG}/releases/latest`, {
-    headers: githubHeaders(),
+    headers: githubHeaders(token),
   });
-  if (res.status === 404) {
-    throw Object.assign(new Error(`No GitHub releases found for ${GITHUB_REPO_SLUG}.`), {
-      code: "NO_RELEASE",
-    });
-  }
-  if (res.status === 401 || res.status === 403) {
-    throw new Error(
-      `GitHub returned ${res.status}. This private repo needs access — open ${GITHUB_LATEST_RELEASE_URL} while signed in, or add a read-only GitHub token in Settings.`,
+  if (res.status === 404 || res.status === 401 || res.status === 403) {
+    throw Object.assign(
+      new Error(
+        token
+          ? `GitHub returned ${res.status} for ${GITHUB_REPO_SLUG}.`
+          : `Private GitHub repo — sign in at ${GITHUB_LATEST_RELEASE_URL} or add a token in Settings.`,
+      ),
+      { code: "GITHUB_DENIED", status: res.status },
     );
   }
   if (!res.ok) {
@@ -133,7 +176,7 @@ async function fetchGithubLatest(): Promise<{ version: string; downloadUrl: stri
   const json = (await res.json()) as {
     tag_name?: string;
     html_url?: string;
-    assets?: { name?: string; browser_download_url?: string }[];
+    assets?: { id?: number; name?: string; browser_download_url?: string }[];
   };
   const version = (json.tag_name || "").replace(/^v/i, "");
   if (!version) {
@@ -143,13 +186,20 @@ async function fetchGithubLatest(): Promise<{ version: string; downloadUrl: stri
     (a) => /setup/i.test(a.name || "") && /\.exe$/i.test(a.name || "") && !/portable/i.test(a.name || ""),
   );
   const anyExe = json.assets?.find((a) => /\.exe$/i.test(a.name || "") && !/portable/i.test(a.name || ""));
+  const asset = setup || anyExe;
   return {
     version,
-    downloadUrl: setup?.browser_download_url || anyExe?.browser_download_url || json.html_url || GITHUB_LATEST_RELEASE_URL,
+    downloadUrl: asset?.browser_download_url || json.html_url || GITHUB_LATEST_RELEASE_URL,
+    assetId: asset?.id ?? null,
+    assetName: asset?.name || `Account-Manager-Setup-${version}.exe`,
   };
 }
 
 export async function checkForUpdates(): Promise<UpdateState> {
+  if (checking) {
+    return getUpdateState();
+  }
+  checking = true;
   state.currentVersion = app.getVersion();
   state.packaged = app.isPackaged;
   state.status = "checking";
@@ -158,81 +208,103 @@ export async function checkForUpdates(): Promise<UpdateState> {
   emit();
 
   try {
-    applyFeed();
-    const remote = await fetchGithubLatest();
+    const token = await resolveGithubToken();
+    applyFeed(token);
+    const remote = await fetchGithubLatest(token);
     if (compareVersions(remote.version, state.currentVersion) <= 0) {
       markUpToDate(remote.version);
       return getUpdateState();
     }
-    markAvailable(remote.version, remote.downloadUrl);
-    const settings = getSettings();
-    if (state.canInstall && settings.autoDownloadUpdates) {
-      await downloadUpdate();
-    }
+    markAvailable(remote.version, remote.downloadUrl, remote.assetId, remote.assetName);
     return getUpdateState();
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "NO_RELEASE") {
-      markUpToDate(state.currentVersion);
-      state.message = `You're on v${state.currentVersion}. No GitHub release has been published yet.`;
-      emit();
-      return getUpdateState();
-    }
     state.status = "error";
     state.message = err instanceof Error ? err.message : String(err);
     emit();
     return getUpdateState();
+  } finally {
+    checking = false;
   }
+}
+
+async function downloadAsset(token: string, assetId: number, filename: string): Promise<string> {
+  const res = await fetch(`https://api.github.com/repos/${GITHUB_REPO_SLUG}/releases/assets/${assetId}`, {
+    headers: {
+      ...githubHeaders(token),
+      Accept: "application/octet-stream",
+    },
+    redirect: "follow",
+  });
+  if (!res.ok) {
+    throw new Error(`Could not download installer (${res.status}).`);
+  }
+  const dest = join(tmpdir(), filename.replace(/[^\w.-]+/g, "_"));
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length < 1024) {
+    throw new Error("Downloaded installer was empty.");
+  }
+  writeFileSync(dest, buf);
+  return dest;
 }
 
 export async function downloadUpdate(): Promise<UpdateState> {
   const openFallback = async () => {
     await shell.openExternal(lastDownloadUrl || GITHUB_LATEST_RELEASE_URL);
-    state.message = "Opened the GitHub release page for the installer.";
+    state.status = state.status === "error" ? "error" : "available";
+    state.message = "Opened the GitHub release page. Download the Setup exe there.";
     emit();
   };
 
-  if (!canInstallUpdates()) {
-    await openFallback();
-    return getUpdateState();
-  }
   if (state.status !== "available" && state.status !== "ready" && state.status !== "error") {
     await checkForUpdates();
   }
   if (state.status === "up-to-date") {
     return getUpdateState();
   }
-  try {
-    applyFeed();
-    state.status = "downloading";
-    state.message = "Downloading update from GitHub…";
-    state.percent = 0;
-    emit();
-    await autoUpdater.checkForUpdates();
-    await autoUpdater.downloadUpdate();
-    return getUpdateState();
-  } catch {
+  if (state.status === "error") {
     await openFallback();
-    state.status = "available";
     return getUpdateState();
   }
+
+  const token = await resolveGithubToken();
+  if (token && lastAssetId) {
+    try {
+      state.status = "downloading";
+      state.message = "Downloading installer from GitHub…";
+      state.percent = 10;
+      emit();
+      const dest = await downloadAsset(token, lastAssetId, lastAssetName);
+      state.status = "ready";
+      state.percent = 100;
+      state.message = "Installer downloaded. Opening it now.";
+      emit();
+      const opened = await shell.openPath(dest);
+      if (opened) {
+        throw new Error(opened);
+      }
+      return getUpdateState();
+    } catch (err) {
+      state.status = "available";
+      state.message = err instanceof Error ? err.message : String(err);
+      emit();
+      await openFallback();
+      return getUpdateState();
+    }
+  }
+
+  await openFallback();
+  return getUpdateState();
 }
 
 export function installUpdate(): UpdateState {
-  if (!canInstallUpdates()) {
-    state.status = "error";
-    state.message = "This build cannot self-update. Install the new setup from GitHub Releases.";
-    emit();
-    return getUpdateState();
-  }
-  autoUpdater.quitAndInstall(false, true);
+  void downloadUpdate();
   return getUpdateState();
 }
 
 export function initUpdater(): void {
   state.currentVersion = app.getVersion();
   state.packaged = app.isPackaged;
-  state.canInstall = canInstallUpdates();
+  state.canInstall = true;
 
   autoUpdater.on("download-progress", (progress) => {
     state.status = "downloading";
@@ -250,20 +322,15 @@ export function initUpdater(): void {
     emit();
   });
 
-  autoUpdater.on("error", (err) => {
-    if (state.status === "up-to-date" || state.status === "available" || state.status === "ready") {
-      return;
-    }
-    state.status = "error";
-    state.message = err.message || String(err);
-    emit();
+  autoUpdater.on("error", () => {
+    /* REST download handles failures */
   });
 }
 
 export async function maybeAutoCheck(): Promise<void> {
   if (!getSettings().autoCheckUpdates) {
     state.status = "idle";
-    state.message = `Running v${state.currentVersion}.`;
+    state.message = `Running v${state.currentVersion}. Click the version chip to check GitHub.`;
     emit();
     return;
   }
