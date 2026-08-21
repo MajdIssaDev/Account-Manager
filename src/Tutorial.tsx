@@ -45,7 +45,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "cards",
     title: "Account cards",
-    body: "Click a card to select it. Ctrl+click adds or removes one. Shift+click selects a range. Hold and drag to reorder; drag several at once when they sit next to each other with no gaps. Right-click opens actions.",
+    body: "Click a card to select it. Double-click an active card to launch it (or focus if it is already running). Ctrl+click adds or removes one. Shift+click selects a range. Hold and drag to reorder; drag several at once when they sit next to each other with no gaps. Right-click opens actions.",
   },
   {
     target: "launch-selected",

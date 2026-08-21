@@ -42,6 +42,21 @@ export default function AccountCard(props: {
         }
         props.onPick(e);
       }}
+      onDoubleClick={(e) => {
+        if (props.floating || e.button !== 0 || busy) {
+          return;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        if (a.inactive) {
+          return;
+        }
+        if (a.running) {
+          props.onFocus();
+          return;
+        }
+        props.onLaunch();
+      }}
       onPointerDown={props.floating ? undefined : props.onPointerDown}
       onContextMenu={(e) => {
         if (props.floating) {
