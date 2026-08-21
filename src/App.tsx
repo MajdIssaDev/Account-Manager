@@ -7,6 +7,7 @@ import AccountCard from "./AccountCard";
 import ConfirmDialog from "./ConfirmDialog";
 import LabelSidebar from "./LabelSidebar";
 import Tutorial from "./Tutorial";
+import TitleBarControls from "./TitleBarControls";
 
 function updateChip(state: UpdateState | null): { label: string; kind: string } {
   if (!state) {
@@ -23,7 +24,7 @@ function updateChip(state: UpdateState | null): { label: string; kind: string } 
     case "downloading":
       return { label: `${v} · ${state.percent}%`, kind: "warn" };
     case "ready":
-      return { label: `${v} · restart to update`, kind: "warn" };
+      return { label: `${v} · restart to apply`, kind: "warn" };
     case "error":
       return { label: `${v} · update error`, kind: "bad" };
     default:
@@ -172,10 +173,19 @@ export default function App() {
           title={update?.message || "Check for updates"}
           onClick={() => {
             void (async () => {
-              if (update?.status === "ready" || update?.status === "available") {
+              if (update?.status === "ready") {
+                const next = await window.ram.installUpdate();
+                setUpdate(next);
+                show(next.message);
+                return;
+              }
+              if (update?.status === "available") {
                 const next = await window.ram.downloadUpdate();
                 setUpdate(next);
                 show(next.message);
+                return;
+              }
+              if (update?.status === "downloading") {
                 return;
               }
               setUpdate((prev) =>
@@ -185,7 +195,7 @@ export default function App() {
               );
               const checked = await window.ram.checkUpdates();
               setUpdate(checked);
-              if (checked.status === "available" || checked.status === "error") {
+              if (checked.status === "available") {
                 const next = await window.ram.downloadUpdate();
                 setUpdate(next);
                 show(next.message);
@@ -217,6 +227,7 @@ export default function App() {
         <button className="btn primary" data-tour="add-account" onClick={() => setAddOpen(true)}>
           Add account
         </button>
+        <TitleBarControls />
       </header>
 
       <div className="shell">

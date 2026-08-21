@@ -39,6 +39,10 @@ const api = {
   checkUpdates: (): Promise<UpdateState> => ipcRenderer.invoke("updater:check"),
   downloadUpdate: (): Promise<UpdateState> => ipcRenderer.invoke("updater:download"),
   installUpdate: (): Promise<UpdateState> => ipcRenderer.invoke("updater:install"),
+  minimize: (): Promise<void> => ipcRenderer.invoke("window:minimize"),
+  toggleMaximize: (): Promise<boolean> => ipcRenderer.invoke("window:toggleMaximize"),
+  closeWindow: (): Promise<void> => ipcRenderer.invoke("window:close"),
+  isMaximized: (): Promise<boolean> => ipcRenderer.invoke("window:isMaximized"),
   onAccountsChanged: (cb: (accounts: AccountPublic[]) => void): (() => void) => {
     const listener = (_e: unknown, accounts: AccountPublic[]): void => cb(accounts);
     ipcRenderer.on("accounts:changed", listener);
@@ -58,6 +62,11 @@ const api = {
     const listener = (_e: unknown, next: AppSettings): void => cb(next);
     ipcRenderer.on("settings:changed", listener);
     return () => ipcRenderer.removeListener("settings:changed", listener);
+  },
+  onMaximized: (cb: (maximized: boolean) => void): (() => void) => {
+    const listener = (_e: unknown, maximized: boolean): void => cb(maximized);
+    ipcRenderer.on("window:maximized", listener);
+    return () => ipcRenderer.removeListener("window:maximized", listener);
   },
 };
 

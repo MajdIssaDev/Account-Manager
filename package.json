@@ -1,6 +1,6 @@
 {
   "name": "account-manager",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Local manager for Roblox accounts you own",
   "author": "Account Manager",
   "repository": {
@@ -86,6 +86,7 @@
       "uninstallDisplayName": "Account Manager",
       "runAfterFinish": true,
       "deleteAppDataOnUninstall": false,
+      "differentialPackage": true,
       "artifactName": "Account-Manager-Setup-${version}.${ext}"
     },
     "portable": {

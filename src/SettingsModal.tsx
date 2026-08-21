@@ -101,6 +101,7 @@ export default function SettingsModal(props: {
           This build is <strong>v{update?.currentVersion || "…"}</strong>
           {update?.latestVersion ? ` · GitHub latest v${update.latestVersion}` : ""}.
           {" "}Version checks use the private GitHub repo <code>{GITHUB_REPO_SLUG}</code>.
+          {" "}Updates replace files in this install and restart — they do not open the Setup wizard again.
           {" "}{update?.message}
         </p>
         <label className="attach">
@@ -117,7 +118,7 @@ export default function SettingsModal(props: {
             checked={autoDownloadUpdates}
             onChange={(e) => setAutoDownload(e.target.checked)}
           />
-          Download updates automatically (installed app only)
+          Apply new files automatically (installed app only)
         </label>
         <label>GitHub token (optional)</label>
         <input
@@ -174,12 +175,12 @@ export default function SettingsModal(props: {
           </button>
           {update?.status === "available" && (
             <button className="btn primary" onClick={() => void window.ram.downloadUpdate()}>
-              {update.canInstall ? "Download update" : "Get update"}
+              {update.canInstall ? "Apply update" : "Update unavailable"}
             </button>
           )}
           {update?.status === "ready" && (
             <button className="btn primary" onClick={() => void window.ram.installUpdate()}>
-              Restart to update
+              Restart to apply
             </button>
           )}
           <button className="btn" onClick={props.onClose}>

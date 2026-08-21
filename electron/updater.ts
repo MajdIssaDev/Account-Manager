@@ -1,9 +1,9 @@
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { promisify } from "util";
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow } from "electron";
 import { autoUpdater } from "electron-updater";
 import type { UpdateState } from "../shared/types";
 import {
@@ -22,10 +22,12 @@ autoUpdater.allowPrerelease = false;
 
 let mainWindow: BrowserWindow | null = null;
 let lastInfoVersion: string | null = null;
-let lastDownloadUrl: string | null = null;
 let lastAssetId: number | null = null;
 let lastAssetName = "Account-Manager-Setup.exe";
+let pendingInstaller: string | null = null;
+let updaterReady = false;
 let checking = false;
+let downloading = false;
 
 const state: UpdateState = {
   currentVersion: app.getVersion(),
@@ -106,7 +108,7 @@ function applyFeed(token: string): void {
       ...(token ? { token } : {}),
     });
   } catch {
-    /* GitHub REST download is the primary path */
+    /* REST + silent apply is the fallback */
   }
 }
 
@@ -137,23 +139,33 @@ function markUpToDate(latest: string): void {
   emit();
 }
 
-function markAvailable(latest: string, downloadUrl: string | null, assetId: number | null, assetName: string): void {
+function markAvailable(latest: string, assetId: number | null, assetName: string): void {
   lastInfoVersion = latest;
-  lastDownloadUrl = downloadUrl;
   lastAssetId = assetId;
   lastAssetName = assetName;
   state.status = "available";
   state.latestVersion = latest;
   state.percent = 0;
+  state.canInstall = canInstallUpdates();
+  state.downloadUrl = null;
+  state.message = state.canInstall
+    ? `Version ${latest} is available. Click to apply the new files, then restart.`
+    : `Version ${latest} is available. Portable builds can't patch in place — use the installed app.`;
+  emit();
+}
+
+function markReady(version: string | null, viaUpdater: boolean): void {
+  updaterReady = viaUpdater;
+  state.status = "ready";
+  state.latestVersion = version || lastInfoVersion;
+  state.percent = 100;
   state.canInstall = true;
-  state.downloadUrl = downloadUrl;
-  state.message = `Version ${latest} is available. Click to install.`;
+  state.message = `Version ${state.latestVersion} is ready. Restart to apply the new files.`;
   emit();
 }
 
 async function fetchGithubLatest(token: string): Promise<{
   version: string;
-  downloadUrl: string | null;
   assetId: number | null;
   assetName: string;
 }> {
@@ -175,8 +187,7 @@ async function fetchGithubLatest(token: string): Promise<{
   }
   const json = (await res.json()) as {
     tag_name?: string;
-    html_url?: string;
-    assets?: { id?: number; name?: string; browser_download_url?: string }[];
+    assets?: { id?: number; name?: string }[];
   };
   const version = (json.tag_name || "").replace(/^v/i, "");
   if (!version) {
@@ -189,7 +200,6 @@ async function fetchGithubLatest(token: string): Promise<{
   const asset = setup || anyExe;
   return {
     version,
-    downloadUrl: asset?.browser_download_url || json.html_url || GITHUB_LATEST_RELEASE_URL,
     assetId: asset?.id ?? null,
     assetName: asset?.name || `Account-Manager-Setup-${version}.exe`,
   };
@@ -215,7 +225,12 @@ export async function checkForUpdates(): Promise<UpdateState> {
       markUpToDate(remote.version);
       return getUpdateState();
     }
-    markAvailable(remote.version, remote.downloadUrl, remote.assetId, remote.assetName);
+    markAvailable(remote.version, remote.assetId, remote.assetName);
+    try {
+      await autoUpdater.checkForUpdates();
+    } catch {
+      /* download path can still use a silent apply */
+    }
     return getUpdateState();
   } catch (err) {
     state.status = "error";
@@ -236,94 +251,153 @@ async function downloadAsset(token: string, assetId: number, filename: string): 
     redirect: "follow",
   });
   if (!res.ok) {
-    throw new Error(`Could not download installer (${res.status}).`);
+    throw new Error(`Could not download update (${res.status}).`);
   }
   const dest = join(tmpdir(), filename.replace(/[^\w.-]+/g, "_"));
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length < 1024) {
-    throw new Error("Downloaded installer was empty.");
+    throw new Error("Downloaded update was empty.");
   }
   writeFileSync(dest, buf);
   return dest;
 }
 
-export async function downloadUpdate(): Promise<UpdateState> {
-  const openFallback = async () => {
-    await shell.openExternal(lastDownloadUrl || GITHUB_LATEST_RELEASE_URL);
-    state.status = state.status === "error" ? "error" : "available";
-    state.message = "Opened the GitHub release page. Download the Setup exe there.";
-    emit();
-  };
+function downloadWithUpdater(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (updaterReady) {
+      resolve();
+      return;
+    }
+    let settled = false;
+    const finishOk = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      autoUpdater.off("update-downloaded", finishOk);
+      autoUpdater.off("error", finishErr);
+      resolve();
+    };
+    const finishErr = (err: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      autoUpdater.off("update-downloaded", finishOk);
+      autoUpdater.off("error", finishErr);
+      reject(err);
+    };
+    const timer = setTimeout(() => {
+      finishErr(new Error("Update download timed out."));
+    }, 10 * 60 * 1000);
+    autoUpdater.once("update-downloaded", finishOk);
+    autoUpdater.once("error", finishErr);
+    void autoUpdater.downloadUpdate().catch(finishErr);
+  });
+}
 
+export async function downloadUpdate(): Promise<UpdateState> {
+  if (downloading) {
+    return getUpdateState();
+  }
   if (state.status !== "available" && state.status !== "ready" && state.status !== "error") {
     await checkForUpdates();
   }
-  if (state.status === "up-to-date") {
+  if (state.status === "up-to-date" || state.status === "ready") {
     return getUpdateState();
   }
-  if (state.status === "error") {
-    await openFallback();
+  if (!canInstallUpdates()) {
+    state.status = "available";
+    state.message =
+      "This copy can't patch files in place. Install with Setup once; later updates replace files and restart.";
+    emit();
     return getUpdateState();
   }
 
-  const token = await resolveGithubToken();
-  if (token && lastAssetId) {
+  downloading = true;
+  state.status = "downloading";
+  state.message = "Downloading new files…";
+  state.percent = 5;
+  emit();
+
+  try {
+    const token = await resolveGithubToken();
+    applyFeed(token);
     try {
-      state.status = "downloading";
-      state.message = "Downloading installer from GitHub…";
-      state.percent = 10;
-      emit();
-      const dest = await downloadAsset(token, lastAssetId, lastAssetName);
-      state.status = "ready";
-      state.percent = 100;
-      state.message = "Installer downloaded. Opening it now.";
-      emit();
-      const opened = await shell.openPath(dest);
-      if (opened) {
-        throw new Error(opened);
-      }
+      await autoUpdater.checkForUpdates();
+      await downloadWithUpdater();
+      markReady(state.latestVersion, true);
       return getUpdateState();
-    } catch (err) {
-      state.status = "available";
-      state.message = err instanceof Error ? err.message : String(err);
-      emit();
-      await openFallback();
+    } catch {
+      if (!token || !lastAssetId) {
+        throw new Error("Could not download the update files.");
+      }
+      pendingInstaller = await downloadAsset(token, lastAssetId, lastAssetName);
+      markReady(lastInfoVersion, false);
       return getUpdateState();
     }
+  } catch (err) {
+    state.status = "error";
+    state.message = err instanceof Error ? err.message : String(err);
+    emit();
+    return getUpdateState();
+  } finally {
+    downloading = false;
   }
-
-  await openFallback();
-  return getUpdateState();
 }
 
 export function installUpdate(): UpdateState {
-  void downloadUpdate();
+  if (!canInstallUpdates()) {
+    state.message = "Updates that replace files only work in the installed app.";
+    emit();
+    return getUpdateState();
+  }
+  if (state.status !== "ready") {
+    void downloadUpdate().then((next) => {
+      if (next.status === "ready") {
+        applyDownloadedUpdate();
+      }
+    });
+    return getUpdateState();
+  }
+  applyDownloadedUpdate();
   return getUpdateState();
+}
+
+function applyDownloadedUpdate(): void {
+  state.message = "Restarting to apply the new files…";
+  emit();
+  if (updaterReady) {
+    setImmediate(() => autoUpdater.quitAndInstall(true, true));
+    return;
+  }
+  if (pendingInstaller) {
+    const setup = pendingInstaller;
+    spawn(setup, ["/S"], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    setTimeout(() => app.quit(), 400);
+  }
 }
 
 export function initUpdater(): void {
   state.currentVersion = app.getVersion();
   state.packaged = app.isPackaged;
-  state.canInstall = true;
+  state.canInstall = canInstallUpdates();
 
   autoUpdater.on("download-progress", (progress) => {
     state.status = "downloading";
     state.percent = Math.round(progress.percent);
-    state.message = `Downloading update… ${state.percent}%`;
+    state.message = `Downloading new files… ${state.percent}%`;
     emit();
   });
 
   autoUpdater.on("update-downloaded", (info) => {
-    state.status = "ready";
-    state.latestVersion = info.version || lastInfoVersion;
-    state.percent = 100;
-    state.canInstall = true;
-    state.message = `Version ${state.latestVersion} is downloaded. Restart to install.`;
-    emit();
+    markReady(info.version || lastInfoVersion, true);
   });
 
   autoUpdater.on("error", () => {
-    /* REST download handles failures */
+    /* downloadUpdate handles failures */
   });
 }
 
@@ -335,4 +409,7 @@ export async function maybeAutoCheck(): Promise<void> {
     return;
   }
   await checkForUpdates();
+  if (getSettings().autoDownloadUpdates && state.status === "available" && canInstallUpdates()) {
+    await downloadUpdate();
+  }
 }

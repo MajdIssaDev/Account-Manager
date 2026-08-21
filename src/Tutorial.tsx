@@ -20,7 +20,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "updates",
     title: "Updates",
-    body: "This chip shows the current version. Click it to check GitHub and download a newer installer when one exists.",
+    body: "This chip shows the current version. Click it to check GitHub. Newer versions replace files in this install and ask you to restart — no Setup wizard.",
   },
   {
     target: "attach",

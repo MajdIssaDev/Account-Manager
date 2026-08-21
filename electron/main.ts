@@ -3,6 +3,7 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  Menu,
   session,
   shell,
 } from "electron";
@@ -101,8 +102,10 @@ function createMainWindow(): void {
     height: 740,
     minWidth: 820,
     minHeight: 560,
-    backgroundColor: "#12151c",
+    backgroundColor: "#0b0e16",
     title: "Account Manager",
+    frame: false,
+    show: false,
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
@@ -112,6 +115,18 @@ function createMainWindow(): void {
     },
   });
   attachUpdaterWindow(mainWindow);
+  const emitMaximized = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+    mainWindow.webContents.send("window:maximized", mainWindow.isMaximized());
+  };
+  mainWindow.on("maximize", emitMaximized);
+  mainWindow.on("unmaximize", emitMaximized);
+  mainWindow.once("ready-to-show", () => {
+    mainWindow?.show();
+    emitMaximized();
+  });
   if (process.env.ELECTRON_RENDERER_URL) {
     mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
   } else {
@@ -438,9 +453,28 @@ function registerIpc(): void {
   ipcMain.handle("updater:check", () => checkForUpdates());
   ipcMain.handle("updater:download", () => downloadUpdate());
   ipcMain.handle("updater:install", () => installUpdate());
+  ipcMain.handle("window:minimize", () => {
+    mainWindow?.minimize();
+  });
+  ipcMain.handle("window:toggleMaximize", () => {
+    if (!mainWindow) {
+      return false;
+    }
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+    return mainWindow.isMaximized();
+  });
+  ipcMain.handle("window:close", () => {
+    mainWindow?.close();
+  });
+  ipcMain.handle("window:isMaximized", () => Boolean(mainWindow?.isMaximized()));
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   initUpdater();
   registerIpc();
   createMainWindow();
