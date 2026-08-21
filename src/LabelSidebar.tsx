@@ -8,30 +8,28 @@ export default function LabelSidebar(props: {
   showInactive: boolean;
   onToggleLabel: (id: string) => void;
   onToggleInactive: () => void;
-  onCreate: (name: string, color: string) => void;
+  onNewLabel: () => void;
   onUpdate: (id: string, patch: { name?: string; color?: string }) => void;
   onDelete: (id: string) => void;
 }) {
-  const [name, setName] = useState("");
-  const [color, setColor] = useState(LABEL_SWATCHES[2]);
   const [editing, setEditing] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
-
-  const add = () => {
-    const trimmed = name.trim();
-    if (!trimmed) {
-      return;
-    }
-    props.onCreate(trimmed, color);
-    setName("");
-  };
 
   return (
     <aside className="sidebar" data-tour="labels">
       <div className="sidebar-head">
         <h2>Labels</h2>
-        <p>Multi-select uses OR — any matching label is shown.</p>
+        <button
+          type="button"
+          className="sidebar-add"
+          data-tour="create-label"
+          title="New label"
+          onClick={props.onNewLabel}
+        >
+          +
+        </button>
       </div>
+      <p className="sidebar-hint">Multi-select uses OR — any matching label is shown.</p>
       <div className="label-list">
         {props.labels.map((label) => {
           const on = props.selectedIds.includes(label.id);
@@ -106,39 +104,6 @@ export default function LabelSidebar(props: {
         Show Inactive
       </button>
       <p className="sidebar-hint">Click Inactive alone to list every hidden account.</p>
-      <div className="new-label" data-tour="create-label">
-        <label>New label</label>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Name"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              add();
-            }
-          }}
-        />
-        <div className="swatches">
-          {LABEL_SWATCHES.map((c) => (
-            <button
-              key={c}
-              type="button"
-              className={`swatch${color === c ? " on" : ""}`}
-              style={{ background: c }}
-              onClick={() => setColor(c)}
-            />
-          ))}
-          <input
-            type="color"
-            value={color}
-            onChange={(e) => setColor(e.target.value)}
-            title="Custom color"
-          />
-        </div>
-        <button className="btn primary" disabled={!name.trim()} onClick={add}>
-          Add label
-        </button>
-      </div>
     </aside>
   );
 }

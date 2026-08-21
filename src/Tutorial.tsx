@@ -40,70 +40,127 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "create-label",
     title: "Your own labels",
-    body: "Main and Alt ship by default. Add more names, pick a color, and double-click a label to rename it. Color dots cycle palettes.",
+    body: "Main and Alt ship by default. Use the + next to Labels, or right-click a card → Add label → New label. Double-click a label to rename it; the color dots cycle palettes.",
   },
   {
     target: "cards",
     title: "Account cards",
-    body: "Each card can launch, focus, or close that client. Assign labels, mark Inactive (only Inactive shows a badge), and tick the box to multi-select.",
+    body: "Click a card to select it. Ctrl+click adds or removes one. Shift+click selects from the last card to this one, left-to-right then top-to-bottom. Right-click for labels, inactive, launch, and remove.",
   },
   {
     target: "launch-selected",
     title: "Launch selected",
-    body: "Select two or more accounts and this button appears. It launches them one after another. Remove always asks you to confirm first.",
+    body: "When several cards are selected, Launch selected appears here. Right-click the selection for labels, inactive/active, and remove. Remove always asks you to confirm first.",
   },
   {
     target: "help",
     title: "Replay this tutorial",
-    body: "You can open this walkthrough again anytime from Tutorial. End tutorial closes it and remembers you have seen it.",
+    body: "The (i) button opens this walkthrough again. Finishing it once is enough — later app updates will not show it on launch.",
   },
 ];
 
+type Hole = {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+  radius: string;
+};
+
+function measureHole(target: string): Hole | null {
+  const el = document.querySelector(`[data-tour="${target}"]`);
+  if (!(el instanceof HTMLElement)) {
+    return null;
+  }
+  const r = el.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let left = r.left;
+  let top = r.top;
+  let right = r.right;
+  let bottom = r.bottom;
+  let radius = getComputedStyle(el).borderRadius || "0px";
+
+  if (target === "cards") {
+    left = r.left;
+    top = r.top;
+    right = vw;
+    bottom = vh;
+    radius = "0px";
+  } else if (target === "labels") {
+    left = 0;
+    top = r.top;
+    right = r.right;
+    bottom = vh;
+    radius = "0px";
+  }
+
+  left = Math.max(0, Math.round(left));
+  top = Math.max(0, Math.round(top));
+  right = Math.min(vw, Math.round(right));
+  bottom = Math.min(vh, Math.round(bottom));
+
+  return {
+    top,
+    left,
+    width: Math.max(0, right - left),
+    height: Math.max(0, bottom - top),
+    radius,
+  };
+}
+
 export default function Tutorial(props: {
   steps?: TutorialStep[];
+  allowSkip?: boolean;
   onEnd: () => void;
 }) {
   const steps = props.steps || TUTORIAL_STEPS;
   const [index, setIndex] = useState(0);
-  const [rect, setRect] = useState<DOMRect | null>(null);
+  const [hole, setHole] = useState<Hole | null>(null);
 
   const step = steps[index];
+  const last = index === steps.length - 1;
+  const allowSkip = props.allowSkip !== false;
 
   useEffect(() => {
-    const measure = () => {
-      const el = document.querySelector(`[data-tour="${step.target}"]`);
-      setRect(el ? el.getBoundingClientRect() : null);
-    };
+    const measure = () => setHole(measureHole(step.target));
     measure();
-    const timer = window.setInterval(measure, 250);
+    const timer = window.setInterval(measure, 120);
+    const ro = new ResizeObserver(measure);
+    const el = document.querySelector(`[data-tour="${step.target}"]`);
+    if (el) {
+      ro.observe(el);
+    }
     window.addEventListener("resize", measure);
     window.addEventListener("scroll", measure, true);
     return () => {
       window.clearInterval(timer);
+      ro.disconnect();
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
     };
   }, [step.target]);
 
-  const pad = 8;
-  const hole = rect
-    ? {
-        top: Math.max(8, rect.top - pad),
-        left: Math.max(8, rect.left - pad),
-        width: rect.width + pad * 2,
-        height: rect.height + pad * 2,
-      }
-    : null;
-
   const tipStyle = (): CSSProperties => {
     if (!hole) {
       return { top: "50%", left: "50%", transform: "translate(-50%, -50%)" };
     }
-    const below = hole.top + hole.height + 12;
-    const spaceBelow = window.innerHeight - below;
-    const top = spaceBelow > 180 ? below : Math.max(12, hole.top - 168);
-    const left = Math.min(Math.max(12, hole.left), window.innerWidth - 360);
-    return { top, left };
+    const gap = 12;
+    const cardW = Math.min(340, window.innerWidth - 24);
+    const cardH = 200;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    if (hole.width > 280 && hole.height > 220) {
+      return {
+        top: Math.min(hole.top + 16, vh - cardH - 12),
+        left: Math.min(Math.max(hole.left + 16, 12), vw - cardW - 12),
+        width: cardW,
+      };
+    }
+    const below = hole.top + hole.height + gap;
+    const top = vh - below > cardH + 16 ? below : Math.max(12, hole.top - cardH - gap);
+    const left = Math.min(Math.max(12, hole.left), vw - cardW - 12);
+    return { top, left, width: cardW };
   };
 
   return (
@@ -117,6 +174,7 @@ export default function Tutorial(props: {
             left: hole.left,
             width: hole.width,
             height: hole.height,
+            borderRadius: hole.radius,
           }}
         />
       )}
@@ -130,18 +188,22 @@ export default function Tutorial(props: {
           <button className="btn" disabled={index === 0} onClick={() => setIndex((i) => i - 1)}>
             Previous
           </button>
-          {index < steps.length - 1 ? (
-            <button className="btn primary" onClick={() => setIndex((i) => i + 1)}>
-              Next
-            </button>
-          ) : (
+          {last ? (
             <button className="btn primary" onClick={props.onEnd}>
               End tutorial
             </button>
+          ) : (
+            <>
+              <button className="btn primary" onClick={() => setIndex((i) => i + 1)}>
+                Next
+              </button>
+              {allowSkip && (
+                <button className="btn" onClick={props.onEnd}>
+                  End tutorial
+                </button>
+              )}
+            </>
           )}
-          <button className="btn" onClick={props.onEnd}>
-            End tutorial
-          </button>
         </div>
       </div>
     </div>

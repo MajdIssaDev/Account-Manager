@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import type { AccountPublic, AppSettings, UpdateState } from "../shared/types";
 import { DEFAULT_LABELS } from "../shared/types";
 import AddAccountModal from "./AddAccountModal";
@@ -8,6 +8,9 @@ import ConfirmDialog from "./ConfirmDialog";
 import LabelSidebar from "./LabelSidebar";
 import Tutorial from "./Tutorial";
 import TitleBarControls from "./TitleBarControls";
+import ContextMenu, { type CtxItem } from "./ContextMenu";
+import NewLabelModal from "./NewLabelModal";
+import { IconAddUser, IconGear, IconInfo } from "./icons";
 
 function updateChip(state: UpdateState | null): { label: string; kind: string } {
   if (!state) {
@@ -46,10 +49,14 @@ export default function App() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [anchorId, setAnchorId] = useState<string | null>(null);
   const [filterLabels, setFilterLabels] = useState<string[]>([]);
   const [showInactive, setShowInactive] = useState(false);
-  const [removeTarget, setRemoveTarget] = useState<AccountPublic | null>(null);
+  const [removeIds, setRemoveIds] = useState<string[] | null>(null);
   const [tourOpen, setTourOpen] = useState(false);
+  const [tourSkip, setTourSkip] = useState(true);
+  const [menu, setMenu] = useState<{ x: number; y: number; ids: string[] } | null>(null);
+  const [newLabelFor, setNewLabelFor] = useState<string[] | null>(null);
 
   useEffect(() => {
     void window.ram.listAccounts().then(setAccounts);
@@ -57,6 +64,7 @@ export default function App() {
       setSettings(s);
       applyTheme(s.themeId);
       if (!s.tutorialDone) {
+        setTourSkip(false);
         window.setTimeout(() => setTourOpen(true), 400);
       }
     });
@@ -151,14 +159,189 @@ export default function App() {
   }, [accounts, filterLabels, showInactive, labels]);
 
   const selectedVisible = selectedIds.filter((id) => visible.some((a) => a.id === id));
-
   const chip = updateChip(update);
+
+  const pick = (id: string, e: MouseEvent) => {
+    const ids = visible.map((a) => a.id);
+    const idx = ids.indexOf(id);
+    if (idx < 0) {
+      return;
+    }
+    if (e.shiftKey && anchorId) {
+      const from = ids.indexOf(anchorId);
+      if (from >= 0) {
+        const start = Math.min(from, idx);
+        const end = Math.max(from, idx);
+        const range = ids.slice(start, end + 1);
+        setSelectedIds((prev) =>
+          e.ctrlKey ? Array.from(new Set([...prev, ...range])) : range,
+        );
+        return;
+      }
+    }
+    if (e.ctrlKey) {
+      setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+      setAnchorId(id);
+      return;
+    }
+    setSelectedIds([id]);
+    setAnchorId(id);
+  };
+
+  const openMenu = (id: string, e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const ids = selectedIds.includes(id) && selectedIds.length > 0 ? selectedIds : [id];
+    if (!selectedIds.includes(id)) {
+      setSelectedIds([id]);
+      setAnchorId(id);
+    }
+    setMenu({ x: e.clientX, y: e.clientY, ids });
+  };
+
+  const targets = (ids: string[]) => accounts.filter((a) => ids.includes(a.id));
+
+  const addLabelTo = async (ids: string[], labelId: string) => {
+    const snap = accounts;
+    for (const id of ids) {
+      const acc = snap.find((a) => a.id === id);
+      if (!acc || acc.labelIds.includes(labelId)) {
+        continue;
+      }
+      await window.ram.patchAccount(id, { labelIds: [...acc.labelIds, labelId] });
+    }
+  };
+
+  const removeLabelFrom = async (ids: string[], labelId: string) => {
+    const snap = accounts;
+    for (const id of ids) {
+      const acc = snap.find((a) => a.id === id);
+      if (!acc || !acc.labelIds.includes(labelId)) {
+        continue;
+      }
+      await window.ram.patchAccount(id, { labelIds: acc.labelIds.filter((x) => x !== labelId) });
+    }
+  };
+
+  const setInactiveFor = async (ids: string[], inactive: boolean) => {
+    for (const id of ids) {
+      await window.ram.patchAccount(id, { inactive });
+    }
+  };
+
+  const createLabel = async (name: string, color: string, applyTo: string[]) => {
+    const res = await window.ram.createLabel(name, color);
+    setNewLabelFor(null);
+    if (!res.ok || !res.data) {
+      show(res.error || "Could not create label.");
+      return;
+    }
+    if (applyTo.length) {
+      await addLabelTo(applyTo, res.data.id);
+    }
+  };
+
+  const menuItems = (ids: string[]): CtxItem[] => {
+    const rows = targets(ids);
+    const n = rows.length;
+    const anyRunning = rows.some((a) => a.running);
+    const anyIdle = rows.some((a) => !a.running);
+    const anyActive = rows.some((a) => !a.inactive);
+    const anyInactive = rows.some((a) => a.inactive);
+    const usedLabelIds = new Set(rows.flatMap((a) => a.labelIds));
+    const addChildren: CtxItem[] = [
+      ...labels.map((label) => ({
+        type: "item" as const,
+        label: label.name,
+        checked: n > 0 && rows.every((a) => a.labelIds.includes(label.id)),
+        onClick: () => void addLabelTo(ids, label.id),
+      })),
+      { type: "sep" as const },
+      {
+        type: "item" as const,
+        label: "New label",
+        onClick: () => setNewLabelFor(ids),
+      },
+    ];
+    const removeChildren: CtxItem[] = labels
+      .filter((label) => usedLabelIds.has(label.id))
+      .map((label) => ({
+        type: "item" as const,
+        label: label.name,
+        onClick: () => void removeLabelFrom(ids, label.id),
+      }));
+    const items: CtxItem[] = [
+      {
+        type: "item",
+        label: n > 1 ? `Launch selected (${n})` : "Launch",
+        disabled: !anyIdle,
+        onClick: () =>
+          void run(
+            "__many__",
+            () => window.ram.launchMany(rows.filter((a) => !a.running).map((a) => a.id)),
+            false,
+          ),
+      },
+    ];
+    if (anyRunning) {
+      if (n === 1) {
+        items.push({
+          type: "item",
+          label: "Focus",
+          onClick: () => void run(rows[0].id, () => window.ram.focus(rows[0].id)),
+        });
+      }
+      items.push({
+        type: "item",
+        label: n > 1 ? "Close selected clients" : "Close",
+        onClick: () => {
+          void (async () => {
+            for (const row of rows.filter((a) => a.running)) {
+              await window.ram.close(row.id);
+            }
+          })();
+        },
+      });
+    }
+    items.push({ type: "sep" });
+    items.push({ type: "item", label: "Add label", children: addChildren });
+    if (removeChildren.length) {
+      items.push({ type: "item", label: "Remove label", children: removeChildren });
+    }
+    items.push({ type: "sep" });
+    if (anyActive) {
+      items.push({
+        type: "item",
+        label: n > 1 ? "Set Inactive" : "Set Inactive",
+        onClick: () => void setInactiveFor(ids, true),
+      });
+    }
+    if (anyInactive) {
+      items.push({
+        type: "item",
+        label: "Set Active",
+        onClick: () => void setInactiveFor(ids, false),
+      });
+    }
+    items.push({ type: "sep" });
+    items.push({
+      type: "item",
+      label: n > 1 ? `Remove ${n} accounts` : "Remove",
+      danger: true,
+      onClick: () => setRemoveIds(ids),
+    });
+    return items;
+  };
 
   const endTour = async () => {
     setTourOpen(false);
     const next = await window.ram.setSettings({ tutorialDone: true });
     setSettings(next);
   };
+
+  const removePreview = removeIds
+    ? removeIds.map((id) => accounts.find((a) => a.id === id)?.username || id)
+    : [];
 
   return (
     <div className="app">
@@ -218,14 +401,35 @@ export default function App() {
           />
           Attach Potassium on launch
         </label>
-        <button className="btn" data-tour="help" onClick={() => setTourOpen(true)}>
-          Tutorial
+        <button
+          type="button"
+          className="icon-btn"
+          data-tour="help"
+          aria-label="Tutorial"
+          onClick={() => {
+            setTourSkip(true);
+            setTourOpen(true);
+          }}
+        >
+          <IconInfo />
         </button>
-        <button className="btn" data-tour="settings" onClick={() => setSettingsOpen(true)}>
-          Settings
+        <button
+          type="button"
+          className="icon-btn"
+          data-tour="settings"
+          aria-label="Settings"
+          onClick={() => setSettingsOpen(true)}
+        >
+          <IconGear />
         </button>
-        <button className="btn primary" data-tour="add-account" onClick={() => setAddOpen(true)}>
-          Add account
+        <button
+          type="button"
+          className="icon-btn primary"
+          data-tour="add-account"
+          aria-label="Add account"
+          onClick={() => setAddOpen(true)}
+        >
+          <IconAddUser />
         </button>
         <TitleBarControls />
       </header>
@@ -239,7 +443,7 @@ export default function App() {
             setFilterLabels((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
           }
           onToggleInactive={() => setShowInactive((v) => !v)}
-          onCreate={(name, color) => void window.ram.createLabel(name, color)}
+          onNewLabel={() => setNewLabelFor([])}
           onUpdate={(id, patch) => void window.ram.updateLabel(id, patch)}
           onDelete={(id) => void window.ram.deleteLabel(id)}
         />
@@ -250,7 +454,7 @@ export default function App() {
                 {selectedVisible.length} selected
                 {showInactive ? " · inactive view" : ""}
               </span>
-              <button className="btn" disabled={selectedVisible.length === 0} onClick={() => setSelectedIds([])}>
+              <button className="btn" onClick={() => setSelectedIds([])}>
                 Clear
               </button>
               <button
@@ -264,52 +468,51 @@ export default function App() {
               </button>
             </div>
           ) : null}
-          {accounts.length === 0 ? (
-            <div className="empty" data-tour="cards">
-              <h3>No accounts yet</h3>
-              <p>Add one with a session cookie, Roblox login, signup, or quick add.</p>
-            </div>
-          ) : visible.length === 0 ? (
-            <div className="empty" data-tour="cards">
-              <h3>{showInactive ? "No inactive accounts" : "Nothing matches"}</h3>
-              <p>
-                {showInactive
-                  ? "Mark a card Inactive to hide it from the main list. Click Show Inactive alone to see all of them."
-                  : "Clear labels or pick different ones. Inactive accounts stay hidden until you click Show Inactive."}
-              </p>
-            </div>
-          ) : (
-            <div className="grid" data-tour="cards">
-              {visible.map((a) => (
-                <AccountCard
-                  key={a.id}
-                  account={a}
-                  labels={labels}
-                  busy={busyId === a.id || busyId === "__many__"}
-                  selected={selectedIds.includes(a.id)}
-                  error={cardErrors[a.id]}
-                  onSelect={(on) =>
-                    setSelectedIds((prev) =>
-                      on ? [...prev, a.id] : prev.filter((id) => id !== a.id),
-                    )
-                  }
-                  onLaunch={() => run(a.id, () => window.ram.launch(a.id), true)}
-                  onFocus={() => run(a.id, () => window.ram.focus(a.id))}
-                  onClose={() => run(a.id, () => window.ram.close(a.id))}
-                  onRemove={() => setRemoveTarget(a)}
-                  onToggleLabel={(labelId) => {
-                    const next = a.labelIds.includes(labelId)
-                      ? a.labelIds.filter((id) => id !== labelId)
-                      : [...a.labelIds, labelId];
-                    void window.ram.patchAccount(a.id, { labelIds: next });
-                  }}
-                  onToggleInactive={() =>
-                    void window.ram.patchAccount(a.id, { inactive: !a.inactive })
-                  }
-                />
-              ))}
-            </div>
-          )}
+          <div
+            className="cards-stage"
+            data-tour="cards"
+            onMouseDown={(e) => {
+              if ((e.target as HTMLElement).closest(".card")) {
+                return;
+              }
+              setSelectedIds([]);
+            }}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            {accounts.length === 0 ? (
+              <div className="empty">
+                <h3>No accounts yet</h3>
+                <p>Add one with a session cookie, Roblox login, signup, or quick add.</p>
+              </div>
+            ) : visible.length === 0 ? (
+              <div className="empty">
+                <h3>{showInactive ? "No inactive accounts" : "Nothing matches"}</h3>
+                <p>
+                  {showInactive
+                    ? "Mark a card Inactive to hide it from the main list. Click Show Inactive alone to see all of them."
+                    : "Clear labels or pick different ones. Inactive accounts stay hidden until you click Show Inactive."}
+                </p>
+              </div>
+            ) : (
+              <div className="grid">
+                {visible.map((a) => (
+                  <AccountCard
+                    key={a.id}
+                    account={a}
+                    labels={labels}
+                    busy={busyId === a.id || busyId === "__many__"}
+                    selected={selectedIds.includes(a.id)}
+                    error={cardErrors[a.id]}
+                    onPick={(e) => pick(a.id, e)}
+                    onContextMenu={(e) => openMenu(a.id, e)}
+                    onLaunch={() => run(a.id, () => window.ram.launch(a.id), true)}
+                    onFocus={() => run(a.id, () => window.ram.focus(a.id))}
+                    onClose={() => run(a.id, () => window.ram.close(a.id))}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -329,26 +532,42 @@ export default function App() {
           onReplayTutorial={() => {
             applyTheme(settings.themeId);
             setSettingsOpen(false);
+            setTourSkip(true);
             setTourOpen(true);
           }}
         />
       )}
-      {removeTarget && (
+      {newLabelFor && (
+        <NewLabelModal
+          onClose={() => setNewLabelFor(null)}
+          onCreate={(name, color) => void createLabel(name, color, newLabelFor)}
+        />
+      )}
+      {removeIds && (
         <ConfirmDialog
-          title="Remove this account?"
-          body={`Remove @${removeTarget.username} from Account Manager? The saved session is deleted from this PC. You can add it again later.`}
+          title={removeIds.length > 1 ? `Remove ${removeIds.length} accounts?` : "Remove this account?"}
+          body={
+            removeIds.length > 1
+              ? `Remove ${removePreview.map((n) => `@${n}`).join(", ")} from Account Manager? Saved sessions are deleted from this PC.`
+              : `Remove @${removePreview[0] || ""} from Account Manager? The saved session is deleted from this PC. You can add it again later.`
+          }
           confirmLabel="Remove"
           danger
-          onCancel={() => setRemoveTarget(null)}
+          onCancel={() => setRemoveIds(null)}
           onConfirm={() => {
-            const id = removeTarget.id;
-            setRemoveTarget(null);
-            setSelectedIds((prev) => prev.filter((x) => x !== id));
-            void run(id, () => window.ram.remove(id));
+            const ids = removeIds;
+            setRemoveIds(null);
+            setSelectedIds((prev) => prev.filter((x) => !ids.includes(x)));
+            void (async () => {
+              for (const id of ids) {
+                await run(id, () => window.ram.remove(id));
+              }
+            })();
           }}
         />
       )}
-      {tourOpen && <Tutorial onEnd={() => void endTour()} />}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.ids)} onClose={() => setMenu(null)} />}
+      {tourOpen && <Tutorial allowSkip={tourSkip} onEnd={() => void endTour()} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
