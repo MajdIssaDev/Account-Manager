@@ -15,7 +15,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "settings",
     title: "Settings",
-    body: "Set the Roblox Player path, Potassium attach, GitHub token for updates, and pick a color theme.",
+    body: "Set the Roblox folder (default or a pinned version for Potassium), attach, GitHub token for updates, and a color theme.",
   },
   {
     target: "updates",

@@ -34,6 +34,8 @@ const api = {
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke("settings:get"),
   setSettings: (patch: Partial<AppSettings>): Promise<AppSettings> =>
     ipcRenderer.invoke("settings:set", patch),
+  pickRobloxFolder: (): Promise<string | null> => ipcRenderer.invoke("settings:pickRobloxFolder"),
+  resolveRoblox: (): Promise<string | null> => ipcRenderer.invoke("settings:resolveRoblox"),
   potassiumStatus: (): Promise<PotassiumStatus> => ipcRenderer.invoke("potassium:status"),
   getUpdateState: (): Promise<UpdateState> => ipcRenderer.invoke("updater:state"),
   checkUpdates: (): Promise<UpdateState> => ipcRenderer.invoke("updater:check"),

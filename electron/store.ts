@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   labels: DEFAULT_LABELS.map((l) => ({ ...l })),
   themeId: "midnight",
   tutorialDone: false,
+  useDefaultRobloxFolder: true,
 };
 
 function dataDir(): string {
@@ -89,6 +90,11 @@ function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
   }
   merged.githubToken = merged.githubToken || "";
   merged.tutorialDone = Boolean(merged.tutorialDone);
+  if (raw && typeof raw.useDefaultRobloxFolder !== "boolean") {
+    merged.useDefaultRobloxFolder = !String(merged.robloxPlayerPath || "").trim();
+  } else {
+    merged.useDefaultRobloxFolder = Boolean(merged.useDefaultRobloxFolder);
+  }
   return merged;
 }
 

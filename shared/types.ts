@@ -62,6 +62,7 @@ export type AppSettings = {
   labels: AccountLabel[];
   themeId: ThemeId;
   tutorialDone: boolean;
+  useDefaultRobloxFolder: boolean;
 };
 
 export type LoginMode = "login" | "signup" | "quick";

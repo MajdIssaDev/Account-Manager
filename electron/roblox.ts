@@ -43,23 +43,62 @@ export function isPidAlive(pid: number): boolean {
   }
 }
 
-export function findRobloxPlayer(explicitPath?: string): string | null {
-  if (explicitPath && existsSync(explicitPath)) {
-    return explicitPath;
-  }
-  const versions = join(process.env.LOCALAPPDATA || "", "Roblox", "Versions");
-  if (!existsSync(versions)) {
+export function defaultRobloxVersionsDir(): string {
+  return join(process.env.LOCALAPPDATA || "", "Roblox", "Versions");
+}
+
+function newestPlayerIn(dir: string): string | null {
+  if (!existsSync(dir)) {
     return null;
   }
+  const direct = join(dir, PLAYER);
+  if (existsSync(direct)) {
+    return direct;
+  }
   const candidates: { path: string; mtime: number }[] = [];
-  for (const name of readdirSync(versions)) {
-    const exe = join(versions, name, PLAYER);
-    if (existsSync(exe)) {
-      candidates.push({ path: exe, mtime: statSync(exe).mtimeMs });
+  try {
+    for (const name of readdirSync(dir)) {
+      const exe = join(dir, name, PLAYER);
+      if (existsSync(exe)) {
+        candidates.push({ path: exe, mtime: statSync(exe).mtimeMs });
+      }
     }
+  } catch {
+    return null;
   }
   candidates.sort((a, b) => b.mtime - a.mtime);
   return candidates[0]?.path || null;
+}
+
+export function findRobloxPlayer(explicitPath?: string): string | null {
+  if (explicitPath) {
+    const trimmed = explicitPath.trim();
+    if (trimmed) {
+      if (existsSync(trimmed) && trimmed.toLowerCase().endsWith(".exe")) {
+        return trimmed;
+      }
+      const fromCustom = newestPlayerIn(trimmed);
+      if (fromCustom) {
+        return fromCustom;
+      }
+    }
+  }
+  return newestPlayerIn(defaultRobloxVersionsDir());
+}
+
+export function resolveRobloxPlayer(): string | null {
+  const settings = getSettings();
+  if (settings.useDefaultRobloxFolder) {
+    return newestPlayerIn(defaultRobloxVersionsDir());
+  }
+  const custom = (settings.robloxPlayerPath || "").trim();
+  if (!custom) {
+    return null;
+  }
+  if (existsSync(custom) && custom.toLowerCase().endsWith(".exe")) {
+    return custom;
+  }
+  return newestPlayerIn(custom);
 }
 
 async function waitForNewPid(before: number[], timeoutMs = 20000): Promise<number> {
@@ -79,9 +118,13 @@ async function waitForNewPid(before: number[], timeoutMs = 20000): Promise<numbe
 
 export async function launchAccount(cookieEnc: string): Promise<number> {
   const settings = getSettings();
-  const exe = findRobloxPlayer(settings.robloxPlayerPath || undefined);
+  const exe = resolveRobloxPlayer();
   if (!exe) {
-    throw new Error("RobloxPlayerBeta.exe not found. Set the path in Settings.");
+    throw new Error(
+      settings.useDefaultRobloxFolder
+        ? "RobloxPlayerBeta.exe not found in the default Roblox Versions folder."
+        : "RobloxPlayerBeta.exe not found in the custom folder. Pick a folder that contains it, or use Default folder.",
+    );
   }
   const cookie = decryptCookie(cookieEnc);
   const ticket = await createAuthenticationTicket(cookie);

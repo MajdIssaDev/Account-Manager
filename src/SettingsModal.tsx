@@ -11,6 +11,9 @@ export default function SettingsModal(props: {
   onReplayTutorial: () => void;
 }) {
   const [robloxPlayerPath, setPath] = useState(props.settings.robloxPlayerPath);
+  const [useDefaultRobloxFolder, setUseDefault] = useState(
+    props.settings.useDefaultRobloxFolder !== false,
+  );
   const [attachOnLaunch, setAttach] = useState(props.settings.attachOnLaunch);
   const [names, setNames] = useState(props.settings.potassiumProcessNames.join(", "));
   const [attachCommand, setCmd] = useState(props.settings.attachCommand);
@@ -21,14 +24,10 @@ export default function SettingsModal(props: {
   const [status, setStatus] = useState<string>("");
   const [checking, setChecking] = useState(false);
 
-  const cancel = () => {
-    document.documentElement.setAttribute("data-theme", props.settings.themeId || "midnight");
-    props.onClose();
-  };
-
   const save = async () => {
     const next = await window.ram.setSettings({
       robloxPlayerPath: robloxPlayerPath.trim(),
+      useDefaultRobloxFolder,
       attachOnLaunch,
       potassiumProcessNames: names.split(/[,;\n]/).map((s) => s.trim()).filter(Boolean),
       attachCommand: attachCommand.trim(),
@@ -44,15 +43,58 @@ export default function SettingsModal(props: {
   const update = props.update;
 
   return (
-    <div className="overlay" onMouseDown={cancel}>
+    <div className="overlay" onMouseDown={props.onClose}>
       <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>Settings</h2>
-        <label>Roblox Player path (optional)</label>
-        <input
-          value={robloxPlayerPath}
-          onChange={(e) => setPath(e.target.value)}
-          placeholder="%LOCALAPPDATA%\Roblox\Versions\...\RobloxPlayerBeta.exe"
-        />
+        <label>Roblox folder</label>
+        <div className="choice-row">
+          <button
+            type="button"
+            className={`choice${useDefaultRobloxFolder ? " on" : ""}`}
+            onClick={() => setUseDefault(true)}
+          >
+            Default folder
+          </button>
+          <button
+            type="button"
+            className={`choice${!useDefaultRobloxFolder ? " on" : ""}`}
+            onClick={() => setUseDefault(false)}
+          >
+            Custom folder
+          </button>
+        </div>
+        {useDefaultRobloxFolder ? (
+          <p className="hint">
+            Launches the latest Roblox under %LOCALAPPDATA%\Roblox\Versions (the one the official app updates).
+          </p>
+        ) : (
+          <>
+            <p className="hint">
+              Point at a specific Roblox version folder (the one that contains RobloxPlayerBeta.exe) when
+              Potassium is behind the latest client. Switch back to Default folder after Potassium updates.
+            </p>
+            <div className="path-row">
+              <input
+                value={robloxPlayerPath}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder="C:\path\to\Roblox version folder"
+              />
+              <button
+                type="button"
+                className="btn"
+                onClick={async () => {
+                  const folder = await window.ram.pickRobloxFolder();
+                  if (folder) {
+                    setPath(folder);
+                    setUseDefault(false);
+                  }
+                }}
+              >
+                Browse
+              </button>
+            </div>
+          </>
+        )}
         <label className="attach attach-block">
           <input
             type="checkbox"
@@ -188,7 +230,7 @@ export default function SettingsModal(props: {
               Restart to apply
             </button>
           )}
-          <button className="btn" onClick={cancel}>
+          <button className="btn" onClick={props.onClose}>
             Cancel
           </button>
           <button className="btn primary" onClick={() => void save()}>

@@ -2,6 +2,7 @@ import { join } from "path";
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   session,
@@ -22,7 +23,7 @@ import {
   upsertAccount,
 } from "./store";
 import { attachIfRequested, potassiumStatus } from "./potassium";
-import { closePid, isPidAlive, launchAccount } from "./roblox";
+import { closePid, isPidAlive, launchAccount, resolveRobloxPlayer } from "./roblox";
 import { focusPid } from "./windows";
 import {
   attachUpdaterWindow,
@@ -448,6 +449,18 @@ function registerIpc(): void {
     emitSettings();
     return next;
   });
+  ipcMain.handle("settings:pickRobloxFolder", async (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const picked = await dialog.showOpenDialog(win || undefined, {
+      title: "Choose Roblox folder",
+      properties: ["openDirectory"],
+    });
+    if (picked.canceled || !picked.filePaths[0]) {
+      return null;
+    }
+    return picked.filePaths[0];
+  });
+  ipcMain.handle("settings:resolveRoblox", () => resolveRobloxPlayer());
   ipcMain.handle("potassium:status", () => potassiumStatus());
   ipcMain.handle("updater:state", () => getUpdateState());
   ipcMain.handle("updater:check", () => checkForUpdates());
