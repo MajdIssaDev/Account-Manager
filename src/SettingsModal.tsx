@@ -121,7 +121,7 @@ export default function SettingsModal(props: {
           onChange={(e) => setCmd(e.target.value)}
           placeholder={`"C:\\Path\\to\\potassium.exe" --attach {pid}`}
         />
-        <p className="hint">Placeholders: {"{pid}"} and {"{account}"}. Leave empty to auto-use running Potassium with <code>--attach {"{pid}"}</code>.</p>
+        <p className="hint">When enabled, Account Manager turns on Potassium Auto Attach, installs an autoexec Cloud.lua loader, and tries attach after each launch. Potassium must be installed.</p>
 
         <h2 className="modal-section">Hive / CloudFarm</h2>
         <p className="hint">

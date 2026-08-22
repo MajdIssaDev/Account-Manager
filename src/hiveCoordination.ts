@@ -140,12 +140,39 @@ async function waitForAccountUnique(
   return false;
 }
 
-async function waitForHiveBooted(accountId: string, timeoutMs = 90000): Promise<boolean> {
+type HiveBootSnapshot = {
+  bootGeneration: number;
+  jobId?: string;
+  bootComplete?: boolean;
+};
+
+async function readHiveBootSnapshot(accountId: string): Promise<HiveBootSnapshot | null> {
+  const res = await window.ram.hiveSend({ accountId, op: "status", timeoutMs: 15000 });
+  if (!res.ok || !res.data?.data) {
+    return null;
+  }
+  const data = res.data.data;
+  return {
+    bootGeneration: Number(data.bootGeneration) || 0,
+    jobId: typeof data.jobId === "string" ? data.jobId : undefined,
+    bootComplete: data.bootComplete === true,
+  };
+}
+
+async function waitForHiveReloaded(
+  accountId: string,
+  prior: HiveBootSnapshot,
+  timeoutMs = 90000,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await window.ram.hiveSend({ accountId, op: "status", timeoutMs: 15000 });
-    if (res.ok && res.data?.data?.bootComplete === true) {
-      return true;
+    const state = await readHiveBootSnapshot(accountId);
+    if (state?.bootComplete) {
+      const generationIncreased = state.bootGeneration > prior.bootGeneration;
+      const jobChanged = !!prior.jobId && !!state.jobId && state.jobId !== prior.jobId;
+      if (generationIncreased || jobChanged) {
+        return true;
+      }
     }
     await sleep(3000);
   }
@@ -198,6 +225,7 @@ export async function assignUniqueServers(
 
   for (const account of hopAccounts) {
     hoppedAccountIds.add(account.id);
+    const priorBoot = await readHiveBootSnapshot(account.id);
     const excludeJobIds = [...reserved];
     const candidates = await browseJoinCandidates(browseAccountId, excludeJobIds);
     let joined = false;
@@ -242,13 +270,23 @@ export async function assignUniqueServers(
 
     await waitForAccountUnique(account, connected, 45000);
     sessions = await window.ram.hiveStatus();
+
+    if (options.afterBoot && priorBoot) {
+      const reloaded = await waitForHiveReloaded(account.id, priorBoot, 90000);
+      if (!reloaded) {
+        onToast(`CloudFarm reload not detected for @${account.username} — applying farming stack directly…`);
+        await window.ram.hiveSend({
+          accountId: account.id,
+          op: options.afterBoot.op,
+          payload: options.afterBoot.payload || {},
+          timeoutMs: 30000,
+        });
+      }
+    }
   }
 
   if (options.afterBoot && hoppedAccountIds.size > 0) {
-    onToast("Waiting for hopped clients to reload CloudFarm…");
-    for (const accountId of hoppedAccountIds) {
-      await waitForHiveBooted(accountId, 90000);
-    }
+    onToast("Hopped clients finished server assignment.");
   }
 
   return { assigned, hoppedAccountIds };

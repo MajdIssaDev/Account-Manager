@@ -26,7 +26,7 @@ import {
   updateLabel,
   upsertAccount,
 } from "./store";
-import { attachIfRequested, potassiumStatus } from "./potassium";
+import { attachIfRequested, potassiumStatus, syncPotassiumAttachPreference } from "./potassium";
 import {
   closeAllRoblox,
   closePid,
@@ -559,7 +559,7 @@ function registerIpc(): void {
       rememberPid(id, pid);
       touchLastLogin(id);
       emitAccounts();
-      const warn = await attachIfRequested(pid, row.username);
+      const warn = await attachIfRequested(pid, row.username, row.userId);
       if (warn) {
         mainWindow?.webContents.send("toast", warn);
       }
@@ -717,6 +717,9 @@ function registerIpc(): void {
   ipcMain.handle("settings:get", () => getSettings());
   ipcMain.handle("settings:set", (_e, patch: Partial<AppSettings>) => {
     const next = setSettings(patch);
+    if (typeof patch.attachOnLaunch === "boolean") {
+      syncPotassiumAttachPreference(patch.attachOnLaunch);
+    }
     reloadHiveWatcher();
     emitAccounts();
     emitSettings();
@@ -808,6 +811,9 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   initUpdater();
   registerIpc();
+  if (getSettings().attachOnLaunch) {
+    syncPotassiumAttachPreference(true);
+  }
   startHiveWatcher({
     getSettings,
     isHivePanelOpen,
