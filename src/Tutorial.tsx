@@ -15,7 +15,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "settings",
     title: "Settings",
-    body: "Set the Roblox folder (default or a pinned version for Potassium), attach, GitHub token for updates, and a color theme.",
+    body: "Set the Roblox folder (default or a pinned version for Potassium), attach, hive heartbeat TTL, GitHub token for updates, and a color theme.",
   },
   {
     target: "updates",
@@ -25,7 +25,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "attach",
     title: "Potassium attach",
-    body: "When this is on, Account Manager starts Potassium if needed, writes Potassium auto-attach on, and clicks “Attach to running clients” after each Roblox launch. Cloud.lua is not auto-executed.",
+    body: "When this is on, Account Manager starts Potassium if needed, writes Potassium auto-attach on, and clicks “Attach to running clients” after each Roblox launch. Cloud.lua is not auto-executed — inject it on clients that should farm.",
   },
   {
     target: "labels",
@@ -45,12 +45,17 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "cards",
     title: "Account cards",
-    body: "Click a card to select it. Double-click an active card to launch it (or focus if it is already running). Ctrl+click adds or removes one. Shift+click selects a range. Hold and drag to reorder; drag several at once when they sit next to each other with no gaps. Right-click opens actions.",
+    body: "Click a card to select it. Double-click an active card to launch it (or focus if it is already running). Ctrl+click adds or removes one. Shift+click selects a range. Hold and drag to reorder; drag several at once when they sit next to each other with no gaps. Right-click opens actions. hive means CloudFarm is connected; hive stale is a missed heartbeat; hive off means Roblox is running but Cloud.lua is not injected.",
   },
   {
     target: "launch-selected",
     title: "Launch selected",
-    body: "When several cards are selected, a Launch selected bar floats over the bottom of the grid so the cards do not jump. Right-click the selection for labels, inactive/active, and remove.",
+    body: "When several cards are selected, a bar floats over the bottom of the grid. Launch selected starts those clients. Hive / Sell all / Eat all only include hive-connected clients. Right-click the selection for labels, inactive/active, and remove.",
+  },
+  {
+    target: "hive",
+    title: "Hive control",
+    body: "Hive opens the control drawer for connected clients. Farming stack starts chest farm (one client stays, extras hop in parallel). Configure farm stack sets chest speed, rejoin every X seconds, background fishing, and passive income. Stop all ends the stack. Inject Cloud.lua yourself after script updates.",
   },
   {
     target: "help",
@@ -76,6 +81,7 @@ const COMPACT_TARGETS = new Set([
   "create-label",
   "inactive",
   "launch-selected",
+  "hive",
 ]);
 
 function holePad(target: string): number {

@@ -94,7 +94,7 @@ export default memo(function AccountCard(props: {
             <span>{a.displayName}</span>
             {a.running && <span className="badge">running</span>}
             {a.hiveStatus === "connected" && <span className="badge hive-connected">hive</span>}
-            {a.hiveStatus === "stale" && <span className="badge hive-stale">hive stale</span>}
+            {a.hiveStatus === "stale" && a.running && <span className="badge hive-stale">hive stale</span>}
             {a.hiveStatus === "offline" && a.running && <span className="badge hive-offline">hive off</span>}
             {a.inactive && <span className="badge inactive">inactive</span>}
           </div>

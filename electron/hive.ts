@@ -104,6 +104,27 @@ function ttlMs(settings?: AppSettings): number {
   return Number.isFinite(n) && n >= 1000 ? n : 5000;
 }
 
+function offlineAfterMs(ttl: number): number {
+  return Math.max(ttl * 3, 15000);
+}
+
+function livenessFromHeartbeat(connected: boolean, alive: boolean, last: number, now: number, ttl: number): HiveLiveness {
+  if (!connected || !alive) {
+    return "offline";
+  }
+  if (!last) {
+    return "offline";
+  }
+  const age = now - last;
+  if (age <= ttl) {
+    return "connected";
+  }
+  if (age <= offlineAfterMs(ttl)) {
+    return "stale";
+  }
+  return "offline";
+}
+
 function classify(raw: Record<string, unknown>, filePath: string, now: number, ttl: number): HiveSession | null {
   const userId = Number(raw.robloxUserId ?? raw.userId);
   if (!Number.isFinite(userId) || userId <= 0) {
@@ -116,17 +137,12 @@ function classify(raw: Record<string, unknown>, filePath: string, now: number, t
     (Number(raw.lastHeartbeatAt) > 1e12 ? Number(raw.lastHeartbeatAt) : Number(raw.lastHeartbeatAt) * 1000) ||
     (Number(raw.updatedAt) > 1e12 ? Number(raw.updatedAt) : Number(raw.updatedAt) * 1000) ||
     0;
-  let liveness: HiveLiveness = "connected";
-  if (!connected || !alive) {
-    liveness = "offline";
-  } else if (!last || now - last > ttl) {
-    liveness = "stale";
-  }
+  const liveness = livenessFromHeartbeat(connected, alive, last, now, ttl);
   return {
     userId: Math.floor(userId),
     liveness,
-    connected,
-    alive,
+    connected: liveness !== "offline",
+    alive: liveness !== "offline",
     lastHeartbeatAt: last || null,
     sessionId: typeof raw.sessionId === "string" ? raw.sessionId : undefined,
     placeId: Number(raw.placeId) || undefined,
@@ -165,14 +181,14 @@ function refreshSessionTtl(): boolean {
   let changed = false;
   for (const [userId, session] of sessions) {
     const last = session.lastHeartbeatAt || 0;
-    let liveness: HiveLiveness = "connected";
-    if (!session.connected || session.alive === false) {
-      liveness = "offline";
-    } else if (!last || now - last > ttl) {
-      liveness = "stale";
-    }
-    if (liveness !== session.liveness) {
-      sessions.set(userId, { ...session, liveness });
+    const liveness = livenessFromHeartbeat(session.connected, session.alive !== false, last, now, ttl);
+    if (liveness !== session.liveness || (liveness === "offline" && (session.connected || session.alive))) {
+      sessions.set(userId, {
+        ...session,
+        liveness,
+        connected: liveness !== "offline",
+        alive: liveness !== "offline",
+      });
       changed = true;
     }
   }
@@ -288,7 +304,7 @@ function collectSessionPatches(prev: Map<number, HiveSession>, next: HiveSession
 }
 
 function emitSessionsIfChanged(force = false): HiveSession[] {
-  const prev = new Map(sessions);
+  const prev = new Map(Array.from(sessions.entries()).map(([userId, session]) => [userId, { ...session }]));
   const list = scanSessions(force);
   const nextFp = sessionFingerprint(list);
   const fpChanged = force || nextFp !== lastFingerprint;
@@ -361,6 +377,39 @@ function attachWatcher(): void {
 
 export function listSessions(): HiveSession[] {
   return Array.from(sessions.values()).sort((a, b) => a.userId - b.userId);
+}
+
+export function markHiveSessionsOffline(userIds?: number[]): void {
+  const filter =
+    userIds && userIds.length > 0
+      ? new Set(userIds.map((id) => Math.floor(Number(id))).filter((id) => id > 0))
+      : null;
+  const deltas: { userId: number; hiveStatus: HiveLiveness }[] = [];
+  const patches: HiveSessionPatch[] = [];
+  for (const [userId, session] of sessions) {
+    if (filter && !filter.has(userId)) {
+      continue;
+    }
+    if (session.liveness === "offline" && session.connected === false && session.alive === false) {
+      continue;
+    }
+    sessions.set(userId, { ...session, liveness: "offline", connected: false, alive: false });
+    deltas.push({ userId, hiveStatus: "offline" });
+    patches.push({ userId, fields: { liveness: "offline" } });
+  }
+  if (deltas.length === 0) {
+    return;
+  }
+  lastFingerprint = sessionFingerprint(listSessions());
+  hooks?.onLivenessChange(deltas);
+  hooks?.onSessionPatch(patches);
+  if (hooks?.isHivePanelOpen() ?? hivePanelOpen) {
+    hooks?.onChange(listSessions());
+  }
+}
+
+export function markAllHiveSessionsOffline(): void {
+  markHiveSessionsOffline();
 }
 
 function latestReasonFromReports(reports: unknown): string | undefined {
@@ -924,7 +973,6 @@ export function startHiveWatcher(next: HiveHooks): void {
   pollTimer = setInterval(() => {
     attachWatcher();
     attachLedgerWatcher();
-    refreshSessionTtl();
     emitSessionsIfChanged(false);
   }, 1000);
 }

@@ -761,6 +761,7 @@ export default function App() {
         <button
           type="button"
           className="btn hive-head-btn"
+          data-tour="hive"
           disabled={selectedConnected.length === 0}
           title={selectedConnected.length === 0 ? "Select connected hive clients" : "Hive control"}
           onClick={() => setHiveOpen(true)}
