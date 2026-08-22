@@ -13,6 +13,15 @@ type JoinCandidate = {
   seaName?: string;
 };
 
+type AfterBootCommand = {
+  op: string;
+  payload?: Record<string, unknown>;
+};
+
+type AssignUniqueOptions = {
+  afterBoot?: AfterBootCommand;
+};
+
 export function sessionsForConnected(
   connected: AccountPublic[],
   sessions: HiveSession[],
@@ -131,6 +140,18 @@ async function waitForAccountUnique(
   return false;
 }
 
+async function waitForHiveBooted(accountId: string, timeoutMs = 90000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await window.ram.hiveSend({ accountId, op: "status", timeoutMs: 15000 });
+    if (res.ok && res.data?.data?.bootComplete === true) {
+      return true;
+    }
+    await sleep(3000);
+  }
+  return false;
+}
+
 export async function waitForUniqueServers(
   connected: AccountPublic[],
   timeoutMs = 45000,
@@ -150,24 +171,35 @@ export async function assignUniqueServers(
   connected: AccountPublic[],
   sessions: HiveSession[],
   onToast: (msg: string) => void,
-): Promise<{ assigned: number }> {
+  options: AssignUniqueOptions = {},
+): Promise<{ assigned: number; hoppedAccountIds: Set<string> }> {
   const hopAccounts = accountsToHopForDedupe(connected, sessions);
+  const hoppedAccountIds = new Set<string>();
   if (hopAccounts.length === 0) {
-    return { assigned: 0 };
+    return { assigned: 0, hoppedAccountIds };
   }
 
   const browseAccountId = connected[0]?.id;
   if (!browseAccountId) {
-    return { assigned: 0 };
+    return { assigned: 0, hoppedAccountIds };
   }
 
   const hopAccountIds = new Set(hopAccounts.map((a) => a.id));
   const reserved = reservedJobIds(connected, sessions, hopAccountIds);
   let assigned = 0;
+  const joinPayloadBase: Record<string, unknown> = {
+    quiet: true,
+    claim: true,
+    reason: "hive-dedupe",
+  };
+  if (options.afterBoot) {
+    joinPayloadBase.afterBoot = options.afterBoot;
+  }
 
   for (const account of hopAccounts) {
+    hoppedAccountIds.add(account.id);
     const excludeJobIds = [...reserved];
-    let candidates = await browseJoinCandidates(browseAccountId, excludeJobIds);
+    const candidates = await browseJoinCandidates(browseAccountId, excludeJobIds);
     let joined = false;
 
     for (const pick of candidates) {
@@ -175,12 +207,10 @@ export async function assignUniqueServers(
         accountId: account.id,
         op: "travel.join",
         payload: {
+          ...joinPayloadBase,
           placeId: pick.placeId,
           jobId: pick.id,
           seaName: pick.seaName,
-          quiet: true,
-          claim: true,
-          reason: "hive-dedupe",
         },
         timeoutMs: 35000,
       });
@@ -199,7 +229,12 @@ export async function assignUniqueServers(
       await window.ram.hiveSend({
         accountId: account.id,
         op: "travel.hop",
-        payload: { quiet: true, noStagger: true, reason: "hive-dedupe-fallback" },
+        payload: {
+          quiet: true,
+          noStagger: true,
+          reason: "hive-dedupe-fallback",
+          ...(options.afterBoot ? { afterBoot: options.afterBoot } : {}),
+        },
         timeoutMs: 35000,
       });
       assigned += 1;
@@ -209,7 +244,14 @@ export async function assignUniqueServers(
     sessions = await window.ram.hiveStatus();
   }
 
-  return { assigned };
+  if (options.afterBoot && hoppedAccountIds.size > 0) {
+    onToast("Waiting for hopped clients to reload CloudFarm…");
+    for (const accountId of hoppedAccountIds) {
+      await waitForHiveBooted(accountId, 90000);
+    }
+  }
+
+  return { assigned, hoppedAccountIds };
 }
 
 export async function dedupeServers(
@@ -258,14 +300,15 @@ export async function applyFpsCap(
 async function ensureUniqueServersBeforeFarm(
   connected: AccountPublic[],
   onToast: (msg: string) => void,
-): Promise<void> {
+  options: AssignUniqueOptions = {},
+): Promise<Set<string>> {
   let sessions = await window.ram.hiveStatus();
   const dupN = duplicateJobCount(connected, sessions);
   if (dupN <= 0) {
-    return;
+    return new Set<string>();
   }
   onToast(`Same server detected — assigning unique servers for ${dupN} client${dupN === 1 ? "" : "s"}…`);
-  await assignUniqueServers(connected, sessions, onToast);
+  const { hoppedAccountIds } = await assignUniqueServers(connected, sessions, onToast, options);
   const ok = await waitForUniqueServers(connected, 45000);
   sessions = await window.ram.hiveStatus();
   if (!ok && duplicateJobCount(connected, sessions) > 0) {
@@ -273,6 +316,25 @@ async function ensureUniqueServersBeforeFarm(
   } else if (ok) {
     onToast("Each client is on its own server.");
   }
+  return hoppedAccountIds;
+}
+
+async function sendPresetToReadyAccounts(
+  connected: AccountPublic[],
+  skippedAccountIds: Set<string>,
+  presetName: string,
+): Promise<HiveFanoutBatch | null> {
+  const targets = connected.filter((account) => !skippedAccountIds.has(account.id));
+  if (targets.length === 0) {
+    return null;
+  }
+  const res = await window.ram.hiveSendMany({
+    accountIds: targets.map((account) => account.id),
+    op: "preset.apply",
+    payload: { name: presetName },
+    timeoutMs: 30000,
+  });
+  return res.ok && res.data ? { dropped: res.data.dropped, results: res.data.results } : null;
 }
 
 export async function startPlaylistWithDedupe(
@@ -286,9 +348,13 @@ export async function startPlaylistWithDedupe(
 
 export async function startFarmingStackWithDedupe(
   connected: AccountPublic[],
-  sendMany: SendMany,
+  _sendMany: SendMany,
   onToast: (msg: string) => void,
 ): Promise<HiveFanoutBatch | null> {
-  await ensureUniqueServersBeforeFarm(connected, onToast);
-  return sendMany("preset.apply", { name: "farming_stack" }, 30000);
+  const afterBoot = { op: "preset.apply", payload: { name: "farming_stack" } };
+  const hoppedAccountIds = await ensureUniqueServersBeforeFarm(connected, onToast, { afterBoot });
+  if (hoppedAccountIds.size > 0) {
+    onToast("Hopped clients will auto-start farming stack after CloudFarm reloads.");
+  }
+  return sendPresetToReadyAccounts(connected, hoppedAccountIds, "farming_stack");
 }
