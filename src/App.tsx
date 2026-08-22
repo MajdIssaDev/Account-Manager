@@ -13,6 +13,7 @@ import ContextMenu, { type CtxItem } from "./ContextMenu";
 import NewLabelModal from "./NewLabelModal";
 import HivePanel from "./HivePanel";
 import { HiveStoreProvider, patchAccountsHiveStatus } from "./hiveStore";
+import { DebugMonitorShell } from "./DebugMonitorShell";
 import { IconAddUser, IconGear, IconInfo, IconStop } from "./icons";
 
 function updateChip(state: UpdateState | null): { label: string; kind: string } {
@@ -1021,6 +1022,7 @@ export default function App() {
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.ids)} onClose={() => setMenu(null)} />}
       {tourOpen && <Tutorial allowSkip={tourSkip} onEnd={() => void endTour()} />}
       {toast && <div className="toast">{toast}</div>}
+      <DebugMonitorShell />
     </div>
     </HiveStoreProvider>
   );

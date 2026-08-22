@@ -64,6 +64,7 @@ export type HiveSession = {
   sessionId?: string;
   placeId?: number;
   jobId?: string;
+  bootGeneration?: number;
   serverVerdict?: HiveServerVerdict;
   serverReason?: string;
   threatLevel?: number;
@@ -128,7 +129,7 @@ export const HIVE_STARTABLE_JOBS: { id: string; label: string }[] = [
 
 export type HiveSessionPatch = {
   userId: number;
-  fields: Partial<Pick<HiveSession, "liveness" | "jobId" | "serverVerdict" | "placeId" | "threatLevel">>;
+  fields: Partial<Pick<HiveSession, "liveness" | "jobId" | "serverVerdict" | "placeId" | "threatLevel" | "bootGeneration" | "sessionId">>;
 };
 
 export type HiveLivenessDelta = {

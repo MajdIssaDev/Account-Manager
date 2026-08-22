@@ -408,6 +408,8 @@ export default function HivePanel(props: {
     };
   }, []);
 
+  const [stackBusy, setStackBusy] = useState(false);
+
   const toastBatch = (label: string, batch: Awaited<ReturnType<typeof hive.sendMany>>) => {
     if (batch) {
       props.onToast(`${label}: ${batch.results.filter((r) => r.ok).length}/${batch.results.length} ok`);
@@ -415,16 +417,28 @@ export default function HivePanel(props: {
   };
 
   const runFarmingStack = async () => {
-    toastBatch(
-      "farming_stack",
-      await startFarmingStackWithDedupe(hive.connected, hive.sendMany, props.onToast),
-    );
+    if (stackBusy) {
+      props.onToast("Farming stack is already running — wait for hops to finish.");
+      return;
+    }
+    setStackBusy(true);
+    try {
+      toastBatch(
+        "farming_stack",
+        await startFarmingStackWithDedupe(hive.connected, hive.sendMany, props.onToast),
+      );
+    } finally {
+      setStackBusy(false);
+    }
   };
 
   const runPreset = async (name: string) => {
     if (name === "farming_stack") {
       await runFarmingStack();
       return;
+    }
+    if (name === "stop_all") {
+      await window.ram.setFarmingStackIntent({ userIds: [], active: false });
     }
     toastBatch(name, await hive.sendMany("preset.apply", { name }));
   };
@@ -487,10 +501,10 @@ export default function HivePanel(props: {
               <button
                 type="button"
                 className="btn primary"
-                disabled={hive.busy}
+                disabled={hive.busy || stackBusy}
                 onClick={() => void runPreset("farming_stack")}
               >
-                Farming stack
+                {stackBusy ? "Farming stack…" : "Farming stack"}
               </button>
               <button type="button" className="btn danger" disabled={hive.busy} onClick={() => void runPreset("stop_all")}>
                 Stop all

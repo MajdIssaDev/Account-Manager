@@ -9,7 +9,7 @@ import {
   session,
   shell,
 } from "electron";
-import { CHROME_UA, fetchAuthenticatedUser, normalizeCookie } from "./auth";
+import { CHROME_UA, fetchAuthenticatedUser, normalizeCookie, createAuthenticationTicket } from "./auth";
 import {
   createLabel,
   deleteLabel,
@@ -26,7 +26,7 @@ import {
   updateLabel,
   upsertAccount,
 } from "./store";
-import { attachIfRequested, potassiumStatus, syncPotassiumAttachPreference } from "./potassium";
+import { attachIfRequested, ensurePotassiumRunning, potassiumStatus, removeManagedAutoexec, syncPotassiumAttachPreference } from "./potassium";
 import {
   closeAllRoblox,
   closePid,
@@ -48,7 +48,8 @@ import {
   installUpdate,
   maybeAutoCheck,
 } from "./updater";
-import { startHiveWatcher, reloadHiveWatcher, livenessFor, sendCommand, sendMany, hiveStatusSnapshot, hiveWorkspacePath, ledgerSnapshot, setHivePanelOpen, isHivePanelOpen } from "./hive";
+import { startHiveWatcher, reloadHiveWatcher, livenessFor, sendCommand, sendMany, hiveStatusSnapshot, hiveWorkspacePath, ledgerSnapshot, setHivePanelOpen, isHivePanelOpen, setFarmingStackIntent } from "./hive";
+import { debugMonitor, tryStartLocalDebug } from "./debugGate";
 import type {
   AccountPatch,
   AccountPublic,
@@ -67,8 +68,13 @@ let mainWindow: BrowserWindow | null = null;
 let loginWindow: BrowserWindow | null = null;
 
 const LAUNCH_JOB_TIMEOUT_MS = 90_000;
-const LAUNCH_GAP_MS = 1_500;
+const LAUNCH_GAP_MS = 40;
+const LAUNCH_GAP_FIRST_MS = 60;
 const PID_MISS_LIMIT = 3;
+
+type TicketCacheEntry = { ticket: string; at: number };
+const ticketPrefetch = new Map<string, TicketCacheEntry>();
+const ticketPrefetchInflight = new Map<string, Promise<string | null>>();
 
 type LaunchJob = {
   id: string;
@@ -229,6 +235,50 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function takePrefetchedTicket(accountId: string): string | undefined {
+  const entry = ticketPrefetch.get(accountId);
+  ticketPrefetch.delete(accountId);
+  if (!entry) {
+    return undefined;
+  }
+  if (Date.now() - entry.at > 120_000) {
+    return undefined;
+  }
+  return entry.ticket;
+}
+
+function prefetchLaunchTicket(accountId: string): void {
+  if (ticketPrefetch.has(accountId) || ticketPrefetchInflight.has(accountId)) {
+    return;
+  }
+  const row = getAccount(accountId);
+  if (!row) {
+    return;
+  }
+  const job = (async () => {
+    try {
+      const ticket = await createAuthenticationTicket(row.cookieEnc);
+      ticketPrefetch.set(accountId, { ticket, at: Date.now() });
+      return ticket;
+    } catch {
+      return null;
+    } finally {
+      ticketPrefetchInflight.delete(accountId);
+    }
+  })();
+  ticketPrefetchInflight.set(accountId, job);
+}
+
+function prefetchQueuedTickets(): void {
+  const ids = launchQueue.map((j) => j.id);
+  if (launchActiveId) {
+    ids.unshift(launchActiveId);
+  }
+  for (const id of ids.slice(0, 4)) {
+    prefetchLaunchTicket(id);
+  }
+}
+
 function ok<T>(data?: T): IpcResult<T> {
   return { ok: true, data };
 }
@@ -298,6 +348,7 @@ function createMainWindow(): void {
     attachUpdaterWindow(null);
     mainWindow = null;
   });
+  tryStartLocalDebug(mainWindow, ipcMain);
 }
 
 const FILL_LOGIN = (username: string, password: string): string => `
@@ -542,6 +593,7 @@ function registerIpc(): void {
   const launchOne = async (
     id: string,
     cancelled?: { value: boolean },
+    fast = false,
   ): Promise<IpcResult<{ pid: number }>> => {
     const row = getAccount(id);
     if (!row) {
@@ -552,23 +604,39 @@ function registerIpc(): void {
       return fail("This account is already running. Use Focus.");
     }
     try {
-      const pid = await launchAccount(row.cookieEnc);
+      const launchStart = Date.now();
+      debugMonitor().record("launch", `Launch start @${row.username}`, {
+        detail: { accountId: id, userId: row.userId, fast },
+      });
+      const ticket = takePrefetchedTicket(id);
+      const pid = await launchAccount(row.cookieEnc, { ticket, fast });
       if (cancelled?.value) {
         return fail("Launch timed out — moved on so the queue cannot stay stuck.");
       }
       rememberPid(id, pid);
       touchLastLogin(id);
       emitAccounts();
-      const warn = await attachIfRequested(pid, row.username, row.userId);
-      if (warn) {
-        mainWindow?.webContents.send("toast", warn);
-      }
+      void attachIfRequested(pid, row.username, row.userId, { background: true }).then((warn) => {
+        if (warn) {
+          mainWindow?.webContents.send("toast", warn);
+          debugMonitor().record("toast", warn, { level: "warn", detail: { accountId: id, pid } });
+        }
+      });
+      debugMonitor().record("launch", `Launch ok @${row.username} pid ${pid}`, {
+        durationMs: Date.now() - launchStart,
+        detail: { accountId: id, userId: row.userId, pid, fast, ticketPrefetched: !!ticket },
+      });
       return ok({ pid });
     } catch (err) {
       if (cancelled?.value) {
         return fail("Launch timed out — moved on so the queue cannot stay stuck.");
       }
-      return fail(err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      debugMonitor().record("launch", `Launch failed @${row.username}: ${msg}`, {
+        level: "error",
+        detail: { accountId: id, userId: row.userId },
+      });
+      return fail(msg);
     }
   };
 
@@ -582,6 +650,8 @@ function registerIpc(): void {
     }
     return new Promise((resolve) => {
       launchQueue.push({ id, resolve });
+      prefetchLaunchTicket(id);
+      prefetchQueuedTickets();
       emitLaunchBusy();
       void pumpLaunchQueue();
     });
@@ -592,11 +662,19 @@ function registerIpc(): void {
       return;
     }
     launchPumpRunning = true;
+    let launchedCount = 0;
     try {
+      if (getSettings().attachOnLaunch) {
+        const kWarn = await ensurePotassiumRunning();
+        if (kWarn) {
+          mainWindow?.webContents.send("toast", kWarn);
+        }
+      }
       while (launchQueue.length > 0) {
         const job = launchQueue.shift()!;
         launchActiveId = job.id;
         emitLaunchBusy();
+        prefetchQueuedTickets();
 
         let settled = false;
         const finish = (result: IpcResult<{ pid: number }>) => {
@@ -608,7 +686,8 @@ function registerIpc(): void {
         };
 
         const cancelled = { value: false };
-        const pending = launchOne(job.id, cancelled);
+        const fast = launchedCount > 0 || launchQueue.length > 0;
+        const pending = launchOne(job.id, cancelled, fast);
         const timedOut = sleep(LAUNCH_JOB_TIMEOUT_MS).then(() => null as null);
         try {
           const result = await Promise.race([pending, timedOut]);
@@ -626,9 +705,10 @@ function registerIpc(): void {
 
         launchActiveId = null;
         emitLaunchBusy();
+        launchedCount += 1;
         if (launchQueue.length > 0) {
           await prepareNextLaunch();
-          await sleep(LAUNCH_GAP_MS);
+          await sleep(launchedCount === 1 ? LAUNCH_GAP_FIRST_MS : LAUNCH_GAP_MS);
         }
       }
     } finally {
@@ -718,7 +798,15 @@ function registerIpc(): void {
   ipcMain.handle("settings:set", (_e, patch: Partial<AppSettings>) => {
     const next = setSettings(patch);
     if (typeof patch.attachOnLaunch === "boolean") {
-      syncPotassiumAttachPreference(patch.attachOnLaunch);
+      if (patch.attachOnLaunch) {
+        void ensurePotassiumRunning().then((warn) => {
+          if (warn) {
+            mainWindow?.webContents.send("toast", warn);
+          }
+        });
+      } else {
+        syncPotassiumAttachPreference(false);
+      }
     }
     reloadHiveWatcher();
     emitAccounts();
@@ -780,29 +868,45 @@ function registerIpc(): void {
     return ok(true);
   });
 
+  ipcMain.handle("hive:farmingStackIntent", (_e, input: { userIds?: number[]; active?: boolean }) => {
+    setFarmingStackIntent(Array.isArray(input?.userIds) ? input.userIds : [], input?.active === true);
+    return ok(true);
+  });
+
   ipcMain.handle("hive:status", () => hiveStatusSnapshot());
   ipcMain.handle("hive:ledger", () => ledgerSnapshot());
   ipcMain.handle("hive:workspace", () => hiveWorkspacePath());
   ipcMain.handle("hive:send", async (_e, input: { userId?: number; accountId?: string; op: string; payload?: Record<string, unknown>; timeoutMs?: number }) => {
+    const ipcStart = Date.now();
     const userId = resolveHiveUserId(input?.accountId, input?.userId);
     if (!userId) {
+      debugMonitor().record("ipc", "hive:send missing account", { level: "error", detail: { op: input?.op } });
       return fail("Unknown hive account.");
     }
     const result = await sendCommand(userId, String(input?.op || ""), input?.payload || {}, Number(input?.timeoutMs) || 25000);
+    debugMonitor().record("ipc", `hive:send ${input?.op}`, {
+      durationMs: Date.now() - ipcStart,
+      detail: { accountId: input?.accountId, userId, ok: result.ok },
+    });
     return ok(result);
   });
   ipcMain.handle("hive:sendMany", async (_e, input: { userIds?: number[]; accountIds?: string[]; op: string; payload?: Record<string, unknown>; timeoutMs?: number }) => {
+    const ipcStart = Date.now();
     const userIds = resolveHiveUserIds(input?.accountIds, input?.userIds);
     if (!userIds.length) {
+      debugMonitor().record("ipc", "hive:sendMany empty selection", { level: "warn", detail: { op: input?.op } });
       return fail("No hive accounts selected.");
     }
     const batch = await sendMany(userIds, String(input?.op || ""), input?.payload || {}, Number(input?.timeoutMs) || 25000);
     if (batch.dropped > 0) {
-      mainWindow?.webContents.send(
-        "toast",
-        `${batch.dropped} client${batch.dropped === 1 ? "" : "s"} offline — excluded from hive command.`,
-      );
+      const msg = `${batch.dropped} client${batch.dropped === 1 ? "" : "s"} offline — excluded from hive command.`;
+      mainWindow?.webContents.send("toast", msg);
+      debugMonitor().record("toast", msg, { detail: { op: input?.op, dropped: batch.dropped } });
     }
+    debugMonitor().record("ipc", `hive:sendMany ${input?.op}`, {
+      durationMs: Date.now() - ipcStart,
+      detail: { targets: userIds.length, dropped: batch.dropped, op: input?.op },
+    });
     return ok(batch);
   });
 }
@@ -811,16 +915,27 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   initUpdater();
   registerIpc();
+  removeManagedAutoexec();
   if (getSettings().attachOnLaunch) {
-    syncPotassiumAttachPreference(true);
+    void ensurePotassiumRunning();
+  } else {
+    syncPotassiumAttachPreference(false);
   }
   startHiveWatcher({
     getSettings,
     isHivePanelOpen,
     onChange: (sessions) => {
+      debugMonitor().record("watcher", `hive:changed (${sessions.length} sessions)`, {
+        detail: { count: sessions.length },
+      });
       mainWindow?.webContents.send("hive:changed", sessions);
     },
     onLivenessChange: (deltas) => {
+      if (deltas.length > 0) {
+        debugMonitor().record("watcher", `Liveness delta x${deltas.length}`, {
+          detail: { deltas: deltas.map((d) => ({ userId: d.userId, status: d.hiveStatus })) },
+        });
+      }
       mainWindow?.webContents.send("hive:liveness", deltas);
     },
     onSessionPatch: (patches) => {

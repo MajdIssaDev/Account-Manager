@@ -13,6 +13,7 @@ import {
 import { access, readFile, unlink } from "fs/promises";
 import { basename, dirname, join } from "path";
 import { randomUUID } from "crypto";
+import { debugMonitor } from "./debugGate";
 import type {
   AppSettings,
   HiveCommandResult,
@@ -127,6 +128,7 @@ function classify(raw: Record<string, unknown>, filePath: string, now: number, t
     sessionId: typeof raw.sessionId === "string" ? raw.sessionId : undefined,
     placeId: Number(raw.placeId) || undefined,
     jobId: typeof raw.jobId === "string" ? raw.jobId : undefined,
+    bootGeneration: Number(raw.bootGeneration) || undefined,
     serverVerdict: typeof raw.serverVerdict === "string" ? (raw.serverVerdict as HiveServerVerdict) : undefined,
     serverReason: typeof raw.serverReason === "string" ? raw.serverReason : undefined,
     threatLevel: Number(raw.threatLevel) || undefined,
@@ -142,7 +144,7 @@ function sessionFingerprint(list: HiveSession[]): string {
 }
 
 function sessionFieldsFingerprint(session: HiveSession): string {
-  return `${session.liveness}:${session.jobId || ""}:${session.serverVerdict || ""}:${session.placeId || ""}:${session.threatLevel || ""}`;
+  return `${session.liveness}:${session.jobId || ""}:${session.serverVerdict || ""}:${session.placeId || ""}:${session.threatLevel || ""}:${session.bootGeneration || ""}`;
 }
 
 function readSessionFile(filePath: string, now: number, ttl: number): HiveSession | null {
@@ -175,6 +177,7 @@ function refreshSessionTtl(): boolean {
 }
 
 function scanSessions(forceFull = false): HiveSession[] {
+  const scanStart = Date.now();
   const settings = hooks?.getSettings();
   const root = join(hiveRoot(settings), "sessions");
   const now = Date.now();
@@ -240,7 +243,16 @@ function scanSessions(forceFull = false): HiveSession[] {
   }
 
   refreshSessionTtl();
-  return listSessions();
+  const list = listSessions();
+  const scanMs = Date.now() - scanStart;
+  if (scanMs > 120 || doFull) {
+    debugMonitor().record("watcher", `Session scan ${scanMs}ms`, {
+      level: scanMs > 400 ? "warn" : "info",
+      durationMs: scanMs,
+      detail: { forceFull: doFull, sessions: list.length, files: names.length },
+    });
+  }
+  return list;
 }
 
 function collectSessionPatches(prev: Map<number, HiveSession>, next: HiveSession[]): HiveSessionPatch[] {
@@ -249,7 +261,7 @@ function collectSessionPatches(prev: Map<number, HiveSession>, next: HiveSession
   for (const session of next) {
     const old = prev.get(session.userId);
     if (!old) {
-      patches.push({ userId: session.userId, fields: { liveness: session.liveness, jobId: session.jobId, serverVerdict: session.serverVerdict, placeId: session.placeId, threatLevel: session.threatLevel } });
+      patches.push({ userId: session.userId, fields: { liveness: session.liveness, jobId: session.jobId, serverVerdict: session.serverVerdict, placeId: session.placeId, threatLevel: session.threatLevel, bootGeneration: session.bootGeneration, sessionId: session.sessionId } });
       continue;
     }
     const fields: HiveSessionPatch["fields"] = {};
@@ -258,6 +270,8 @@ function collectSessionPatches(prev: Map<number, HiveSession>, next: HiveSession
     if (old.serverVerdict !== session.serverVerdict) fields.serverVerdict = session.serverVerdict;
     if (old.placeId !== session.placeId) fields.placeId = session.placeId;
     if (old.threatLevel !== session.threatLevel) fields.threatLevel = session.threatLevel;
+    if (old.bootGeneration !== session.bootGeneration) fields.bootGeneration = session.bootGeneration;
+    if (old.sessionId !== session.sessionId) fields.sessionId = session.sessionId;
     if (Object.keys(fields).length > 0) {
       patches.push({ userId: session.userId, fields });
     }
@@ -287,6 +301,7 @@ function emitSessionsIfChanged(force = false): HiveSession[] {
   if (patches.length > 0) {
     hooks?.onSessionPatch(patches);
   }
+  scheduleFarmStackResumes(prev, list);
 
   if (fpChanged) {
     lastFingerprint = nextFp;
@@ -547,6 +562,224 @@ export function livenessFor(userId: number): HiveLiveness {
   return sessions.get(userId)?.liveness || "offline";
 }
 
+const SEA_PLACE_IDS = new Set([12604352060, 15449776494]);
+const farmingStackUserIds = new Set<number>();
+const farmStackSeen = new Map<number, { bootGeneration: number; jobId: string; sessionId: string }>();
+const farmStackResumeAt = new Map<number, number>();
+const farmStackInflight = new Set<number>();
+
+function farmStackFile(): string {
+  return join(process.env.APPDATA || "", "AccountManager", "farming-stack.json");
+}
+
+function persistFarmStack(): void {
+  try {
+    const seen: Record<string, { bootGeneration: number; jobId: string; sessionId: string }> = {};
+    Array.from(farmStackSeen.entries()).forEach(([userId, value]) => {
+      seen[String(userId)] = value;
+    });
+    writeFileSync(
+      farmStackFile(),
+      JSON.stringify({ userIds: Array.from(farmingStackUserIds), seen }, null, 2),
+      "utf8",
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadFarmStack(): void {
+  try {
+    const file = farmStackFile();
+    if (!existsSync(file)) {
+      return;
+    }
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as {
+      userIds?: unknown;
+      seen?: Record<string, { bootGeneration?: number; jobId?: string; sessionId?: string }>;
+    };
+    farmingStackUserIds.clear();
+    farmStackSeen.clear();
+    for (const raw of Array.isArray(parsed.userIds) ? parsed.userIds : []) {
+      const userId = Math.floor(Number(raw));
+      if (userId > 0) {
+        farmingStackUserIds.add(userId);
+      }
+    }
+    if (parsed.seen && typeof parsed.seen === "object") {
+      for (const [key, value] of Object.entries(parsed.seen)) {
+        const userId = Math.floor(Number(key));
+        if (userId > 0 && value) {
+          farmStackSeen.set(userId, {
+            bootGeneration: Number(value.bootGeneration) || 0,
+            jobId: String(value.jobId || ""),
+            sessionId: String(value.sessionId || ""),
+          });
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+loadFarmStack();
+
+function pendingDir(): string {
+  return join(hiveRoot(), "pending");
+}
+
+function writeFarmPending(userId: number): void {
+  const dir = pendingDir();
+  ensureDir(dir);
+  writeFileSync(
+    join(dir, `${userId}.json`),
+    JSON.stringify({
+      v: 1,
+      op: "preset.apply",
+      payload: { name: "farming_stack" },
+      at: Math.floor(Date.now() / 1000),
+    }),
+    "utf8",
+  );
+}
+
+function clearFarmPending(userId: number): void {
+  const path = join(pendingDir(), `${userId}.json`);
+  if (existsSync(path)) {
+    try {
+      unlinkSync(path);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function rememberFarmStackSnapshot(session: HiveSession | undefined, userId: number): void {
+  farmStackSeen.set(userId, {
+    bootGeneration: session?.bootGeneration || 0,
+    jobId: session?.jobId || "",
+    sessionId: session?.sessionId || "",
+  });
+}
+
+export function setFarmingStackIntent(userIds: number[], active: boolean): void {
+  const ids = userIds.map((id) => Math.floor(Number(id))).filter((id) => id > 0);
+  if (active) {
+    if (sessions.size === 0) {
+      scanSessions(true);
+    }
+    for (const userId of ids) {
+      farmingStackUserIds.add(userId);
+      writeFarmPending(userId);
+      rememberFarmStackSnapshot(sessions.get(userId), userId);
+    }
+  } else if (ids.length === 0) {
+    for (const userId of Array.from(farmingStackUserIds)) {
+      clearFarmPending(userId);
+    }
+    farmingStackUserIds.clear();
+    farmStackSeen.clear();
+  } else {
+    for (const userId of ids) {
+      farmingStackUserIds.delete(userId);
+      farmStackSeen.delete(userId);
+      clearFarmPending(userId);
+    }
+  }
+  persistFarmStack();
+}
+
+function noteFarmingStackOp(userId: number, op: string, payload: Record<string, unknown>): void {
+  if (op !== "preset.apply") {
+    return;
+  }
+  const name = String(payload?.name || "");
+  if (name === "farming_stack") {
+    farmingStackUserIds.add(userId);
+    writeFarmPending(userId);
+    rememberFarmStackSnapshot(sessions.get(userId), userId);
+    persistFarmStack();
+    return;
+  }
+  if (name === "stop_all") {
+    farmingStackUserIds.delete(userId);
+    farmStackSeen.delete(userId);
+    clearFarmPending(userId);
+    persistFarmStack();
+  }
+}
+
+function shouldResumeFarmStack(prev: HiveSession | undefined, next: HiveSession): boolean {
+  if (!farmingStackUserIds.has(next.userId)) {
+    return false;
+  }
+  if (next.liveness !== "connected") {
+    return false;
+  }
+  if (!next.placeId || !SEA_PLACE_IDS.has(next.placeId)) {
+    return false;
+  }
+  const seen = farmStackSeen.get(next.userId);
+  if (!seen) {
+    return true;
+  }
+  if (next.bootGeneration && seen.bootGeneration && next.bootGeneration > seen.bootGeneration) {
+    return true;
+  }
+  if (next.jobId && seen.jobId && next.jobId !== seen.jobId) {
+    return true;
+  }
+  if (next.sessionId && seen.sessionId && next.sessionId !== seen.sessionId) {
+    return true;
+  }
+  if (prev && prev.liveness === "offline" && next.liveness === "connected") {
+    return true;
+  }
+  return false;
+}
+
+function scheduleFarmStackResumes(prev: Map<number, HiveSession>, next: HiveSession[]): void {
+  if (farmingStackUserIds.size === 0) {
+    return;
+  }
+  for (const session of next) {
+    if (!shouldResumeFarmStack(prev.get(session.userId), session)) {
+      continue;
+    }
+    rememberFarmStackSnapshot(session, session.userId);
+    persistFarmStack();
+    void resumeFarmStack(session.userId);
+  }
+}
+
+async function resumeFarmStack(userId: number): Promise<void> {
+  const now = Date.now();
+  if (farmStackInflight.has(userId)) {
+    return;
+  }
+  const last = farmStackResumeAt.get(userId) || 0;
+  if (now - last < 8000) {
+    return;
+  }
+  farmStackResumeAt.set(userId, now);
+  farmStackInflight.add(userId);
+  writeFarmPending(userId);
+  try {
+    await sleep(1800);
+    const current = sessions.get(userId);
+    if (!current || current.liveness !== "connected" || !current.placeId || !SEA_PLACE_IDS.has(current.placeId)) {
+      return;
+    }
+    const result = await sendCommand(userId, "preset.apply", { name: "farming_stack" }, 25000);
+    if (!result.ok) {
+      writeFarmPending(userId);
+    }
+  } finally {
+    farmStackInflight.delete(userId);
+  }
+}
+
 function ensureDir(path: string): void {
   if (!existsSync(path)) {
     mkdirSync(path, { recursive: true });
@@ -563,8 +796,13 @@ export async function sendCommand(
   payload: Record<string, unknown> = {},
   timeoutMs = 25000,
 ): Promise<HiveCommandResult> {
+  const started = Date.now();
   const uid = Math.floor(Number(userId));
   if (!Number.isFinite(uid) || uid <= 0) {
+    debugMonitor().record("hive", "sendCommand rejected: invalid_user", {
+      level: "error",
+      detail: { op, userId },
+    });
     return { v: 1, id: "", ok: false, error: "invalid_user" };
   }
   const cmdId = randomUUID();
@@ -582,7 +820,11 @@ export async function sendCommand(
     target: { robloxUserId: uid },
     payload: payload || {},
   };
+  noteFarmingStackOp(uid, op, payload || {});
   writeFileSync(inboxPath, JSON.stringify(envelope), "utf8");
+  debugMonitor().record("hive", `→ inbox ${op}`, {
+    detail: { userId: uid, cmdId, op, timeoutMs, payloadKeys: Object.keys(payload || {}) },
+  });
   const deadline = Date.now() + Math.max(1000, timeoutMs);
   while (Date.now() < deadline) {
     try {
@@ -594,6 +836,12 @@ export async function sendCommand(
       } catch {
         /* keep outbox if locked */
       }
+      const durationMs = Date.now() - started;
+      debugMonitor().record("hive", parsed.ok ? `✓ ${op}` : `✗ ${op}: ${parsed.error || "failed"}`, {
+        level: parsed.ok ? "info" : "error",
+        durationMs,
+        detail: { userId: uid, cmdId, ok: parsed.ok, error: parsed.error },
+      });
       return {
         v: Number(parsed.v) || 1,
         id: String(parsed.id || cmdId),
@@ -605,6 +853,12 @@ export async function sendCommand(
       await sleep(100);
     }
   }
+  const durationMs = Date.now() - started;
+  debugMonitor().record("hive", `timeout ${op}`, {
+    level: "error",
+    durationMs,
+    detail: { userId: uid, cmdId, timeoutMs },
+  });
   return { v: 1, id: cmdId, ok: false, error: "timeout" };
 }
 
@@ -614,6 +868,7 @@ export async function sendMany(
   payload: Record<string, unknown> = {},
   timeoutMs = 25000,
 ): Promise<{ dropped: number; results: HiveSendManyResult[] }> {
+  const batchStart = Date.now();
   const unique = Array.from(new Set(userIds.map((id) => Math.floor(Number(id))).filter((id) => id > 0)));
   const live: number[] = [];
   const dropped: HiveSendManyResult[] = [];
@@ -640,6 +895,13 @@ export async function sendMany(
       } satisfies HiveSendManyResult;
     }),
   );
+  const durationMs = Date.now() - batchStart;
+  const okN = results.filter((r) => r.ok).length;
+  debugMonitor().record("hive", `sendMany ${op} (${okN}/${unique.length} ok, ${dropped.length} dropped)`, {
+    level: okN === 0 && unique.length > 0 ? "warn" : "info",
+    durationMs,
+    detail: { op, targets: unique.length, dropped: dropped.length, ok: okN, timeoutMs },
+  });
   return { dropped: dropped.length, results: [...dropped, ...results] };
 }
 

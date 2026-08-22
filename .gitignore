@@ -8,3 +8,8 @@ release
 .idea
 .env
 *.exe
+
+# Local debug monitor — keep on disk, do not push to GitHub
+electron/debug/
+src/debug/
+debug/

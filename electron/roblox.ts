@@ -217,47 +217,13 @@ async function cleanupInstallerSplash(): Promise<void> {
   await killInstallersNow();
 }
 
-/** Hide Roblox bootstrap/updater windows while the player process starts. */
-async function hideInstallerWindows(): Promise<void> {
-  const script = `
-$ErrorActionPreference = 'SilentlyContinue'
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class RamHide {
-  public delegate bool EnumProc(IntPtr hWnd, IntPtr l);
-  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int n);
-}
-"@
-$pids = @()
-foreach ($n in @('RobloxPlayerInstaller','RobloxStudioInstaller')) {
-  Get-Process -Name $n -ErrorAction SilentlyContinue | ForEach-Object { $pids += $_.Id }
-}
-if ($pids.Count -eq 0) { exit 0 }
-[RamHide]::EnumWindows({ param($h,$l)
-  if (-not [RamHide]::IsWindowVisible($h)) { return $true }
-  [uint32]$wp = 0
-  [RamHide]::GetWindowThreadProcessId($h, [ref]$wp) | Out-Null
-  if ($pids -contains [int]$wp) { [RamHide]::ShowWindow($h, 0) | Out-Null }
-  return $true
-}, [IntPtr]::Zero) | Out-Null
-`.trim();
-  await execFileAsync(
-    "powershell.exe",
-    ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
-    { windowsHide: true, timeout: 5000 },
-  ).catch(() => undefined);
-}
-
-async function waitUntilAppears(before: number[], timeoutMs = 45000): Promise<number> {
+async function waitUntilAppears(before: number[], timeoutMs = 45000, fast = false): Promise<number> {
   const start = Date.now();
   let candidate: number | null = null;
   let seenAt = 0;
+  const holdMs = fast ? 40 : 80;
+  const pollMs = fast ? 40 : 60;
   while (Date.now() - start < timeoutMs) {
-    await hideInstallerWindows();
     const now = await listProcessPids(PLAYER);
     const fresh = now.filter((p) => !before.includes(p) && isPidAlive(p));
     if (fresh.length) {
@@ -265,13 +231,13 @@ async function waitUntilAppears(before: number[], timeoutMs = 45000): Promise<nu
       if (candidate !== pid) {
         candidate = pid;
         seenAt = Date.now();
-      } else if (Date.now() - seenAt >= 400) {
+      } else if (Date.now() - seenAt >= holdMs) {
         return pid;
       }
     } else {
       candidate = null;
     }
-    await sleep(100);
+    await sleep(pollMs);
   }
   throw new Error("Roblox did not start a new client.");
 }
@@ -281,13 +247,19 @@ async function waitUntilStable(
   before: number[],
   holdMs = 3500,
   timeoutMs = 45000,
+  fast = false,
 ): Promise<number> {
+  if (fast) {
+    holdMs = Math.min(holdMs, 180);
+  } else {
+    holdMs = Math.min(holdMs, 320);
+  }
   const start = Date.now();
   let current = initial;
   let heldAt = Date.now();
   let missing = 0;
+  const pollMs = fast ? 40 : 60;
   while (Date.now() - start < timeoutMs) {
-    await hideInstallerWindows();
     const now = await listProcessPids(PLAYER);
     const fresh = now.filter((p) => !before.includes(p) && isPidAlive(p));
     if (!fresh.includes(current)) {
@@ -306,16 +278,21 @@ async function waitUntilStable(
     } else {
       missing = 0;
     }
-    await sleep(120);
+    await sleep(pollMs);
   }
   throw new Error("The new client closed before it finished starting.");
 }
 
 /** Keep closing ROBLOX_singleton on running clients until the next launch can start. */
 async function unlockUntilReady(rounds = 12): Promise<void> {
-  for (let i = 0; i < rounds; i++) {
+  if (isPersistentUnlockActive()) {
     releaseRobloxSingleton();
-    await sleep(80);
+    return;
+  }
+  const n = Math.min(rounds, 4);
+  for (let i = 0; i < n; i++) {
+    releaseRobloxSingleton();
+    await sleep(40);
   }
 }
 
@@ -336,6 +313,17 @@ function unlockHelperPath(): string | null {
 let watcher: ChildProcess | null = null;
 let watchRefs = 0;
 let persistUnlock = false;
+
+export function isPersistentUnlockActive(): boolean {
+  return persistUnlock || (watcher !== null && !watcher.killed);
+}
+
+export type LaunchAccountOptions = {
+  /** Pre-fetched Roblox auth ticket (skips network round-trip). */
+  ticket?: string;
+  /** Shorter stability waits when more clients are queued. */
+  fast?: boolean;
+};
 
 function releaseRobloxSingleton(): void {
   const exe = unlockHelperPath();
@@ -410,12 +398,7 @@ export function setPersistentUnlock(enabled: boolean): void {
 /** Called between queued launches: unlock existing clients, then wait. */
 export async function prepareNextLaunch(): Promise<void> {
   await cleanupInstallerSplash();
-  beginSingletonWatch();
-  try {
-    await unlockUntilReady(16);
-  } finally {
-    endSingletonWatch();
-  }
+  releaseRobloxSingleton();
 }
 
 function spawnPlayer(exe: string, ticket: string): void {
@@ -440,7 +423,8 @@ function spawnPlayer(exe: string, ticket: string): void {
   child.unref();
 }
 
-export async function launchAccount(cookieEnc: string): Promise<number> {
+export async function launchAccount(cookieEnc: string, opts: LaunchAccountOptions = {}): Promise<number> {
+  const fast = opts.fast === true;
   const settings = getSettings();
   const exe = await resolveRobloxPlayerForLaunch();
   if (!exe) {
@@ -458,23 +442,20 @@ export async function launchAccount(cookieEnc: string): Promise<number> {
   }
 
   const cookie = decryptCookie(cookieEnc);
-  const ticket = await createAuthenticationTicket(cookie);
+  const ticket = opts.ticket?.trim() || (await createAuthenticationTicket(cookie));
 
   const before = await listProcessPids(PLAYER);
+  const hadClients = before.length > 0 || isPersistentUnlockActive();
   beginSingletonWatch();
   try {
-    // Unlock any already-running clients so this spawn is allowed.
-    await unlockUntilReady(before.length > 0 ? 16 : 4);
+    await unlockUntilReady(hadClients ? 2 : 1);
     spawnPlayer(exe, ticket);
 
-    const appeared = await waitUntilAppears(before);
-    const stable = await waitUntilStable(appeared, before);
+    const appeared = await waitUntilAppears(before, 45000, fast);
+    const stable = await waitUntilStable(appeared, before, fast ? 180 : 320, 45000, fast);
 
-    // Dismiss leftover bootstrap splash once the player is alive.
-    await cleanupInstallerSplash();
-
-    // Make sure THIS new client's singleton is released before the queue starts the next one.
-    await unlockUntilReady(12);
+    void cleanupInstallerSplash();
+    releaseRobloxSingleton();
     if (!isPidAlive(stable)) {
       throw new Error("The new client closed before it finished starting.");
     }

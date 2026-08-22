@@ -25,7 +25,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     target: "attach",
     title: "Potassium attach",
-    body: "When this is on, a successful launch tries to attach Potassium to that Roblox process if Potassium is already running.",
+    body: "When this is on, Account Manager starts Potassium if needed, writes Potassium auto-attach on, and clicks “Attach to running clients” after each Roblox launch. Cloud.lua is not auto-executed.",
   },
   {
     target: "labels",

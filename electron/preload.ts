@@ -84,6 +84,8 @@ const api = {
   hiveStatus: (): Promise<HiveSession[]> => ipcRenderer.invoke("hive:status"),
   hiveLedger: (): Promise<HiveServerLedgerEntry[]> => ipcRenderer.invoke("hive:ledger"),
   hiveWorkspace: (): Promise<string> => ipcRenderer.invoke("hive:workspace"),
+  setFarmingStackIntent: (input: { userIds: number[]; active: boolean }): Promise<IpcResult<boolean>> =>
+    ipcRenderer.invoke("hive:farmingStackIntent", input),
   hiveSend: (
     input: { userId?: number; accountId?: string; op: string; payload?: Record<string, unknown>; timeoutMs?: number },
   ): Promise<IpcResult<HiveCommandResult>> => ipcRenderer.invoke("hive:send", input),
@@ -112,6 +114,23 @@ const api = {
     const listener = (_e: unknown, entries: HiveServerLedgerEntry[]): void => cb(entries);
     ipcRenderer.on("hive:ledgerChanged", listener);
     return () => ipcRenderer.removeListener("hive:ledgerChanged", listener);
+  },
+  debugGetEvents: (limit?: number) => ipcRenderer.invoke("debug:getEvents", limit),
+  debugGetStats: () => ipcRenderer.invoke("debug:getStats"),
+  debugClear: (): Promise<boolean> => ipcRenderer.invoke("debug:clear"),
+  debugSetEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke("debug:setEnabled", enabled),
+  debugIsEnabled: (): Promise<boolean> => ipcRenderer.invoke("debug:isEnabled"),
+  debugRendererPing: (payload: { driftMs?: number; fps?: number }): Promise<boolean> =>
+    ipcRenderer.invoke("debug:rendererPing", payload),
+  onDebugEvent: (cb: (event: Record<string, unknown>) => void): (() => void) => {
+    const listener = (_e: unknown, event: Record<string, unknown>): void => cb(event);
+    ipcRenderer.on("debug:event", listener);
+    return () => ipcRenderer.removeListener("debug:event", listener);
+  },
+  onDebugCleared: (cb: () => void): (() => void) => {
+    const listener = (): void => cb();
+    ipcRenderer.on("debug:cleared", listener);
+    return () => ipcRenderer.removeListener("debug:cleared", listener);
   },
   onMaximized: (cb: (maximized: boolean) => void): (() => void) => {
     const listener = (_e: unknown, maximized: boolean): void => cb(maximized);

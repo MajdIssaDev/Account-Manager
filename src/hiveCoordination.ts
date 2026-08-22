@@ -20,6 +20,7 @@ type AfterBootCommand = {
 
 type AssignUniqueOptions = {
   afterBoot?: AfterBootCommand;
+  onHoppedReady?: (account: AccountPublic) => Promise<void>;
 };
 
 export function sessionsForConnected(
@@ -68,24 +69,78 @@ export function duplicateJobCount(connected: AccountPublic[], sessions: HiveSess
   return n;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+const SEA_PLACE_IDS = new Set([12604352060, 15449776494]);
+
+let farmingStackInFlight = false;
+
+async function snapshotInSea(accounts: AccountPublic[]): Promise<AccountPublic[]> {
+  const sessions = await window.ram.hiveStatus();
+  return accounts.filter((account) => {
+    const session = sessions.find((s) => s.userId === account.userId);
+    return !!(session?.placeId && SEA_PLACE_IDS.has(session.placeId) && session.liveness === "connected");
+  });
 }
 
-function reservedJobIds(
-  connected: AccountPublic[],
-  sessions: HiveSession[],
-  hopAccountIds: Set<string>,
-): Set<string> {
-  const reserved = new Set<string>();
-  for (const { account, session } of sessionsForConnected(connected, sessions)) {
-    const jobId = session?.jobId?.trim();
-    if (!jobId || hopAccountIds.has(account.id)) {
-      continue;
+async function waitForAnyInSea(accounts: AccountPublic[], timeoutMs = 20000): Promise<AccountPublic[]> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ready = await snapshotInSea(accounts);
+    if (ready.length > 0) {
+      return ready;
     }
-    reserved.add(jobId);
+    await sleep(1500);
   }
-  return reserved;
+  return snapshotInSea(accounts);
+}
+
+async function applyFarmingStack(account: AccountPublic): Promise<boolean> {
+  const res = await window.ram.hiveSend({
+    accountId: account.id,
+    op: "preset.apply",
+    payload: { name: "farming_stack" },
+    timeoutMs: 25000,
+  });
+  return res.ok === true && res.data?.ok === true;
+}
+
+function isSoloInSea(account: AccountPublic, connected: AccountPublic[], sessions: HiveSession[]): boolean {
+  const mine = sessions.find((s) => s.userId === account.userId);
+  const jobId = mine?.jobId?.trim();
+  if (!jobId || !mine?.placeId || !SEA_PLACE_IDS.has(mine.placeId) || mine.liveness !== "connected") {
+    return false;
+  }
+  return !connected.some((other) => {
+    if (other.userId === account.userId) {
+      return false;
+    }
+    return sessions.find((s) => s.userId === other.userId)?.jobId?.trim() === jobId;
+  });
+}
+
+async function applyFarmingStackWithRetry(account: AccountPublic, attempts = 8): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    const sessions = await window.ram.hiveStatus();
+    const mine = sessions.find((s) => s.userId === account.userId);
+    if (mine?.placeId && SEA_PLACE_IDS.has(mine.placeId) && mine.liveness === "connected") {
+      const ok = await applyFarmingStack(account);
+      if (ok) {
+        return true;
+      }
+    }
+    await sleep(2000);
+  }
+  return false;
+}
+
+function allOccupiedJobIds(connected: AccountPublic[], sessions: HiveSession[]): Set<string> {
+  const occupied = new Set<string>();
+  for (const { session } of sessionsForConnected(connected, sessions)) {
+    const jobId = session?.jobId?.trim();
+    if (jobId) {
+      occupied.add(jobId);
+    }
+  }
+  return occupied;
 }
 
 async function browseJoinCandidates(
@@ -121,8 +176,9 @@ async function waitForAccountUnique(
     const sessions = await window.ram.hiveStatus();
     const mySession = sessions.find((s) => s.userId === account.userId);
     const myJob = mySession?.jobId?.trim();
-    if (!myJob) {
-      await sleep(2000);
+    const inSea = !!(mySession?.placeId && SEA_PLACE_IDS.has(mySession.placeId) && mySession.liveness === "connected");
+    if (!myJob || !inSea) {
+      await sleep(1500);
       continue;
     }
     const shared = connected.some((other) => {
@@ -135,48 +191,13 @@ async function waitForAccountUnique(
     if (!shared) {
       return true;
     }
-    await sleep(2000);
+    await sleep(1500);
   }
   return false;
 }
 
-type HiveBootSnapshot = {
-  bootGeneration: number;
-  jobId?: string;
-  bootComplete?: boolean;
-};
-
-async function readHiveBootSnapshot(accountId: string): Promise<HiveBootSnapshot | null> {
-  const res = await window.ram.hiveSend({ accountId, op: "status", timeoutMs: 15000 });
-  if (!res.ok || !res.data?.data) {
-    return null;
-  }
-  const data = res.data.data;
-  return {
-    bootGeneration: Number(data.bootGeneration) || 0,
-    jobId: typeof data.jobId === "string" ? data.jobId : undefined,
-    bootComplete: data.bootComplete === true,
-  };
-}
-
-async function waitForHiveReloaded(
-  accountId: string,
-  prior: HiveBootSnapshot,
-  timeoutMs = 90000,
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const state = await readHiveBootSnapshot(accountId);
-    if (state?.bootComplete) {
-      const generationIncreased = state.bootGeneration > prior.bootGeneration;
-      const jobChanged = !!prior.jobId && !!state.jobId && state.jobId !== prior.jobId;
-      if (generationIncreased || jobChanged) {
-        return true;
-      }
-    }
-    await sleep(3000);
-  }
-  return false;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 export async function waitForUniqueServers(
@@ -211,8 +232,7 @@ export async function assignUniqueServers(
     return { assigned: 0, hoppedAccountIds };
   }
 
-  const hopAccountIds = new Set(hopAccounts.map((a) => a.id));
-  const reserved = reservedJobIds(connected, sessions, hopAccountIds);
+  let occupied = allOccupiedJobIds(connected, sessions);
   let assigned = 0;
   const joinPayloadBase: Record<string, unknown> = {
     quiet: true,
@@ -225,12 +245,14 @@ export async function assignUniqueServers(
 
   for (const account of hopAccounts) {
     hoppedAccountIds.add(account.id);
-    const priorBoot = await readHiveBootSnapshot(account.id);
-    const excludeJobIds = [...reserved];
+    const excludeJobIds = [...occupied];
     const candidates = await browseJoinCandidates(browseAccountId, excludeJobIds);
     let joined = false;
 
     for (const pick of candidates) {
+      if (occupied.has(pick.id)) {
+        continue;
+      }
       const res = await window.ram.hiveSend({
         accountId: account.id,
         op: "travel.join",
@@ -243,13 +265,13 @@ export async function assignUniqueServers(
         timeoutMs: 35000,
       });
       if (res.ok && res.data?.ok) {
-        reserved.add(pick.id);
+        occupied.add(pick.id);
         joined = true;
         assigned += 1;
         break;
       }
       excludeJobIds.push(pick.id);
-      reserved.add(pick.id);
+      occupied.add(pick.id);
     }
 
     if (!joined) {
@@ -268,20 +290,19 @@ export async function assignUniqueServers(
       assigned += 1;
     }
 
-    await waitForAccountUnique(account, connected, 45000);
+    await waitForAccountUnique(account, connected, 25000);
     sessions = await window.ram.hiveStatus();
+    occupied = allOccupiedJobIds(connected, sessions);
 
-    if (options.afterBoot && priorBoot) {
-      const reloaded = await waitForHiveReloaded(account.id, priorBoot, 90000);
-      if (!reloaded) {
-        onToast(`CloudFarm reload not detected for @${account.username} — applying farming stack directly…`);
-        await window.ram.hiveSend({
-          accountId: account.id,
-          op: options.afterBoot.op,
-          payload: options.afterBoot.payload || {},
-          timeoutMs: 30000,
-        });
-      }
+    if (options.onHoppedReady) {
+      await options.onHoppedReady(account);
+    } else if (options.afterBoot) {
+      await window.ram.hiveSend({
+        accountId: account.id,
+        op: options.afterBoot.op,
+        payload: options.afterBoot.payload || {},
+        timeoutMs: 25000,
+      });
     }
   }
 
@@ -389,10 +410,77 @@ export async function startFarmingStackWithDedupe(
   _sendMany: SendMany,
   onToast: (msg: string) => void,
 ): Promise<HiveFanoutBatch | null> {
-  const afterBoot = { op: "preset.apply", payload: { name: "farming_stack" } };
-  const hoppedAccountIds = await ensureUniqueServersBeforeFarm(connected, onToast, { afterBoot });
-  if (hoppedAccountIds.size > 0) {
-    onToast("Hopped clients will auto-start farming stack after CloudFarm reloads.");
+  if (farmingStackInFlight) {
+    onToast("Farming stack is already running — wait for hops to finish.");
+    return null;
   }
-  return sendPresetToReadyAccounts(connected, hoppedAccountIds, "farming_stack");
+  farmingStackInFlight = true;
+  const results: { userId: number; ok: boolean; error?: string }[] = [];
+  const started = new Set<string>();
+  try {
+    let inSea = await snapshotInSea(connected);
+    if (inSea.length === 0) {
+      onToast("Waiting for a client to enter a sea…");
+      inSea = await waitForAnyInSea(connected, 20000);
+    }
+    if (inSea.length === 0) {
+      onToast("No client is in-sea yet — join a sea, then click Farming stack.");
+      return null;
+    }
+
+    await window.ram.setFarmingStackIntent({
+      userIds: connected.map((account) => account.userId),
+      active: true,
+    });
+
+    const startSolos = async (): Promise<AccountPublic[]> => {
+      const sessions = await window.ram.hiveStatus();
+      const ready = inSea.filter((account) => !started.has(account.id) && isSoloInSea(account, connected, sessions));
+      if (ready.length > 0) {
+        onToast(`Starting farm on ${ready.length} solo client${ready.length === 1 ? "" : "s"}…`);
+        await Promise.all(
+          ready.map(async (account) => {
+            started.add(account.id);
+            const ok = await applyFarmingStackWithRetry(account);
+            results.push({ userId: account.userId, ok, error: ok ? undefined : "preset_failed" });
+            if (ok) {
+              onToast(`@${account.username} is farming.`);
+            }
+          }),
+        );
+      }
+      return accountsToHopForDedupe(inSea, sessions).filter((account) => !started.has(account.id));
+    };
+
+    const hopAccounts = await startSolos();
+    if (hopAccounts.length > 0) {
+      onToast(`Moving ${hopAccounts.length} client${hopAccounts.length === 1 ? "" : "s"} off shared servers…`);
+      const sessions = await window.ram.hiveStatus();
+      await assignUniqueServers(inSea, sessions, onToast, {
+        afterBoot: { op: "preset.apply", payload: { name: "farming_stack" } },
+        onHoppedReady: async (account) => {
+          started.add(account.id);
+          const ok = await applyFarmingStackWithRetry(account);
+          results.push({ userId: account.userId, ok, error: ok ? undefined : "preset_failed" });
+          if (ok) {
+            onToast(`@${account.username} is solo — farming started.`);
+          }
+          await startSolos();
+        },
+      });
+    }
+
+    const deadline = Date.now() + 60000;
+    while (started.size < inSea.length && Date.now() < deadline) {
+      await startSolos();
+      if (started.size >= inSea.length) {
+        break;
+      }
+      await sleep(2000);
+    }
+
+    return { dropped: 0, results };
+  } finally {
+    farmingStackInFlight = false;
+  }
 }

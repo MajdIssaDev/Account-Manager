@@ -1,28 +1,15 @@
 import { spawn } from "child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+import { existsSync, mkdirSync, unlinkSync, readFileSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
 import { promisify } from "util";
-import { request as httpRequest } from "http";
 import { execFile as execFileCb } from "child_process";
 import { listProcessPids } from "./roblox";
 import { getSettings } from "./store";
-import { hiveWorkspacePath } from "./hive";
 import type { PotassiumStatus } from "../shared/types";
 
 const execFileAsync = promisify(execFileCb);
-
 const AUTOEXEC_SCRIPT = "AccountManager_Cloud.lua";
-const AUTOEXEC_SOURCE = `-- Account Manager: auto-run CloudFarm after Potassium attaches
-repeat task.wait() until game:IsLoaded()
-task.wait(1.5)
-if isfile("Cloud.lua") then
-	loadfile("Cloud.lua")()
-elseif isfile("CloudFarm.lua") then
-	loadfile("CloudFarm.lua")()
-elseif isfile("CloudFarm script folder/init.lua") then
-	loadfile("CloudFarm script folder/init.lua")()
-end
-`;
+const POTASSIUM_IMAGE = "Potassium.exe";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,8 +27,8 @@ function potassiumSettingsPath(): string {
   return join(potassiumDir(), "settings.json");
 }
 
-function potassiumAutoexecDir(): string {
-  return join(potassiumDir(), "autoexec");
+function potassiumAutoexecPath(): string {
+  return join(potassiumDir(), "autoexec", AUTOEXEC_SCRIPT);
 }
 
 function readJsonObject(path: string): Record<string, unknown> {
@@ -57,49 +44,67 @@ function readJsonObject(path: string): Record<string, unknown> {
 }
 
 function writeJsonObject(path: string, value: Record<string, unknown>): void {
+  const dir = dirname(path);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
   writeFileSync(path, `${JSON.stringify(value, null, 4)}\n`, "utf8");
 }
 
-export function syncPotassiumAttachPreference(enabled: boolean): void {
+function autoAttachEnabledIn(settings: Record<string, unknown>): boolean {
+  return settings.auto_attach === true || settings.autoAttach === true;
+}
+
+export function removeManagedAutoexec(): void {
+  const path = potassiumAutoexecPath();
+  if (existsSync(path)) {
+    try {
+      unlinkSync(path);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+export function syncPotassiumAttachPreference(enabled: boolean): { previousAutoAttach: boolean } {
   const dir = potassiumDir();
   if (!existsSync(dir)) {
-    return;
+    try {
+      mkdirSync(dir, { recursive: true });
+    } catch {
+      return { previousAutoAttach: false };
+    }
   }
   const settingsPath = potassiumSettingsPath();
   const next = readJsonObject(settingsPath);
+  const previousAutoAttach = autoAttachEnabledIn(next);
   next.auto_attach = enabled;
   next.autoAttach = enabled;
+  next.auto_inject = enabled;
+  next.autoInject = enabled;
   writeJsonObject(settingsPath, next);
-
-  if (!enabled) {
-    return;
-  }
-  const autoexecDir = potassiumAutoexecDir();
-  if (!existsSync(autoexecDir)) {
-    mkdirSync(autoexecDir, { recursive: true });
-  }
-  const autoexecPath = join(autoexecDir, AUTOEXEC_SCRIPT);
-  if (!existsSync(autoexecPath) || readFileSync(autoexecPath, "utf8") !== AUTOEXEC_SOURCE) {
-    writeFileSync(autoexecPath, AUTOEXEC_SOURCE, "utf8");
-  }
+  removeManagedAutoexec();
+  return { previousAutoAttach };
 }
 
 export async function potassiumStatus(): Promise<PotassiumStatus> {
   const names = getSettings().potassiumProcessNames.filter(Boolean);
+  const check = names.length ? names : [POTASSIUM_IMAGE];
   let running = false;
-  for (const name of names) {
+  for (const name of check) {
     const pids = await listProcessPids(name);
     if (pids.length) {
       running = true;
       break;
     }
   }
-  return { running, names };
+  return { running, names: check };
 }
 
 export async function resolvePotassiumExe(): Promise<string | null> {
   const names = getSettings().potassiumProcessNames.filter(Boolean);
-  for (const name of names) {
+  const check = names.length ? names : [POTASSIUM_IMAGE];
+  for (const name of check) {
     const base = processBaseName(name);
     try {
       const { stdout } = await execFileAsync(
@@ -134,10 +139,6 @@ export async function resolvePotassiumExe(): Promise<string | null> {
   return null;
 }
 
-function buildDefaultAttachCommand(exe: string): string {
-  return `"${exe}" --attach {pid}`;
-}
-
 function splitCommand(command: string): { exe: string; args: string[] } {
   const matches = command.match(/"[^"]+"|\S+/g) || [];
   const parts = matches.map((p) => p.replace(/^"|"$/g, ""));
@@ -161,142 +162,179 @@ function runAttachCommand(command: string): Promise<{ ok: boolean; error?: strin
   });
 }
 
-async function tryHttpAttach(pid: number): Promise<boolean> {
-  const paths = [
-    `/attach/${pid}`,
-    `/api/attach/${pid}`,
-    `/v1/attach/${pid}`,
-    `/attach?pid=${pid}`,
-  ];
-  const ports = [8225, 9765, 8080];
-  for (const port of ports) {
-    for (const path of paths) {
-      const ok = await new Promise<boolean>((resolve) => {
-        const req = httpRequest(
-          {
-            hostname: "127.0.0.1",
-            port,
-            path,
-            method: "POST",
-            timeout: 1200,
-          },
-          (res) => {
-            res.resume();
-            resolve((res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300);
-          },
-        );
-        req.on("timeout", () => {
-          req.destroy();
-          resolve(false);
-        });
-        req.on("error", () => resolve(false));
-        req.end();
-      });
-      if (ok) {
-        return true;
-      }
+const UIA_ATTACH_SCRIPT = `
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+$proc = Get-Process -Name 'Potassium' -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $proc) { exit 1 }
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+$pidCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, [int]$proc.Id)
+$scope = [System.Windows.Automation.TreeScope]::Descendants
+$clicked = $false
+function Invoke-Named($el) {
+  try {
+    $pat = $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+    if ($pat) { $pat.Invoke(); return $true }
+  } catch {}
+  return $false
+}
+$wins = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $pidCond)
+if ($wins.Count -eq 0) {
+  $one = $root.FindFirst($scope, $pidCond)
+  if ($one) { $wins = @($one) }
+}
+foreach ($win in $wins) {
+  $btnType = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+  $buttons = $win.FindAll($scope, $btnType)
+  foreach ($b in $buttons) {
+    $name = [string]$b.Current.Name
+    if ($name -match '(?i)attach to running' -or ($name -match '(?i)attach' -and $name -notmatch '(?i)detach')) {
+      if (Invoke-Named $b) { $clicked = $true; break }
     }
   }
-  return false;
+  if ($clicked) { break }
+  $all = $win.FindAll($scope, [System.Windows.Automation.Condition]::TrueCondition)
+  foreach ($el in $all) {
+    $name = [string]$el.Current.Name
+    if ($name -match '(?i)attach to running clients') {
+      if (Invoke-Named $el) { $clicked = $true; break }
+    }
+  }
+  if ($clicked) { break }
 }
+if ($clicked) { exit 0 }
+exit 3
+`.trim();
 
-async function trySpawnAttachVariants(exe: string, pid: number): Promise<boolean> {
-  const variants: string[][] = [
-    ["--attach", String(pid)],
-    ["--pid", String(pid)],
-    ["attach", String(pid)],
-    ["-a", String(pid)],
-  ];
-  for (const args of variants) {
-    const result = await runAttachCommand(`"${exe}" ${args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}`);
-    if (result.ok) {
+let lastAttachClickAt = 0;
+let attachClickInflight: Promise<boolean> | null = null;
+
+async function clickPotassiumAttachUi(): Promise<boolean> {
+  if (attachClickInflight) {
+    return attachClickInflight;
+  }
+  if (Date.now() - lastAttachClickAt < 2000) {
+    return true;
+  }
+  attachClickInflight = (async () => {
+    try {
+      await execFileAsync(
+        "powershell.exe",
+        ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", UIA_ATTACH_SCRIPT],
+        { windowsHide: true, timeout: 8000 },
+      );
+      lastAttachClickAt = Date.now();
       return true;
+    } catch {
+      return false;
+    } finally {
+      attachClickInflight = null;
     }
-  }
-  return false;
+  })();
+  return attachClickInflight;
 }
 
-function hiveSessionPath(userId: number): string {
-  return join(hiveWorkspacePath(), "CloudFarmHive", "sessions", `${userId}.json`);
+async function stopPotassium(): Promise<void> {
+  const names = getSettings().potassiumProcessNames.filter(Boolean);
+  const check = names.length ? names : [POTASSIUM_IMAGE];
+  for (const name of check) {
+    const pids = await listProcessPids(name);
+    for (const pid of pids) {
+      await execFileAsync("taskkill", ["/PID", String(pid), "/F"]).catch(() => undefined);
+    }
+  }
+  for (let i = 0; i < 20; i++) {
+    if (!(await potassiumStatus()).running) {
+      return;
+    }
+    await sleep(150);
+  }
 }
 
-async function waitForHiveInjected(userId: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const path = hiveSessionPath(userId);
-    if (existsSync(path)) {
-      try {
-        const raw = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-        const bootComplete = raw.bootComplete === true || (raw.status as Record<string, unknown> | undefined)?.bootComplete === true;
-        const connected = raw.connected !== false;
-        if (bootComplete && connected) {
-          return true;
-        }
-      } catch {
-        /* keep polling */
-      }
-    }
-    await sleep(1500);
+async function spawnPotassium(): Promise<string | null> {
+  const exe = await resolvePotassiumExe();
+  if (!exe) {
+    return "Attach skipped: Potassium.exe not found.";
   }
-  return false;
+  spawn(exe, [], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+  for (let i = 0; i < 24; i++) {
+    await sleep(250);
+    if ((await potassiumStatus()).running) {
+      await sleep(400);
+      return null;
+    }
+  }
+  return "Attach skipped: Potassium did not start.";
 }
+
+export async function ensurePotassiumRunning(): Promise<string | null> {
+  const settings = getSettings();
+  if (!settings.attachOnLaunch) {
+    removeManagedAutoexec();
+    return null;
+  }
+  const { previousAutoAttach } = syncPotassiumAttachPreference(true);
+  const status = await potassiumStatus();
+  const robloxPids = await listProcessPids("RobloxPlayerBeta.exe");
+  // Potassium only reads auto_attach at startup. Restart it when turning the
+  // setting on, but never while Roblox clients are already open (that detaches them).
+  if (status.running && !previousAutoAttach && robloxPids.length === 0) {
+    await stopPotassium();
+    syncPotassiumAttachPreference(true);
+    const err = await spawnPotassium();
+    if (err) {
+      return err;
+    }
+    return null;
+  }
+  if (status.running) {
+    return null;
+  }
+  return spawnPotassium();
+}
+
+export type AttachOptions = {
+  background?: boolean;
+};
 
 export async function attachIfRequested(
   pid: number,
   accountLabel: string,
-  userId?: number,
+  _userId?: number,
+  opts: AttachOptions = {},
 ): Promise<string | null> {
   const settings = getSettings();
   if (!settings.attachOnLaunch) {
     return null;
   }
 
-  syncPotassiumAttachPreference(true);
+  const startErr = await ensurePotassiumRunning();
+  if (startErr) {
+    return startErr;
+  }
 
-  let status = await potassiumStatus();
   const exe = await resolvePotassiumExe();
-  if (!status.running) {
-    if (exe) {
-      spawn(exe, [], { detached: true, stdio: "ignore", windowsHide: true }).unref();
-      await sleep(3500);
-      status = await potassiumStatus();
-    }
-    if (!status.running) {
-      return "Attach skipped: start Potassium first (Account Manager enabled auto-attach + autoexec when possible).";
-    }
-  }
-
-  await sleep(2000);
-
   let cmd = (settings.attachCommand || "").trim();
-  if (!cmd && exe) {
-    cmd = buildDefaultAttachCommand(exe);
-  }
-
   if (cmd) {
-    const expanded = cmd.replaceAll("{pid}", String(pid)).replaceAll("{account}", accountLabel);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (attempt > 0) {
-        await sleep(1200 * attempt);
-      }
-      const result = await runAttachCommand(expanded);
-      if (result.ok) {
-        break;
-      }
-    }
+    const expanded = cmd.split("{pid}").join(String(pid)).split("{account}").join(accountLabel);
+    await runAttachCommand(expanded);
+  } else if (exe) {
+    await runAttachCommand(`"${exe}" --attach ${pid}`);
   }
 
-  if (exe) {
-    await trySpawnAttachVariants(exe, pid);
+  await sleep(900);
+  let clicked = await clickPotassiumAttachUi();
+  if (!clicked) {
+    await sleep(1500);
+    clicked = await clickPotassiumAttachUi();
   }
-  await tryHttpAttach(pid);
-
-  if (typeof userId === "number" && userId > 0) {
-    const injected = await waitForHiveInjected(userId, 45000);
-    if (injected) {
-      return null;
-    }
+  if (!clicked) {
+    await sleep(2000);
+    await clickPotassiumAttachUi();
   }
 
-  return "Potassium attach not confirmed. Enable Auto Attach in Potassium settings — Account Manager installed autoexec/Cloud.lua loader.";
+  if (opts.background) {
+    return null;
+  }
+  return null;
 }

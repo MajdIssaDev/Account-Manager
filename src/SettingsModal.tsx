@@ -107,7 +107,7 @@ export default function SettingsModal(props: {
             checked={attachOnLaunch}
             onChange={(e) => setAttach(e.target.checked)}
           />
-          Attach Potassium on launch if Potassium is running
+          Attach Potassium on launch
         </label>
         <label>Potassium process names</label>
         <input
@@ -121,7 +121,7 @@ export default function SettingsModal(props: {
           onChange={(e) => setCmd(e.target.value)}
           placeholder={`"C:\\Path\\to\\potassium.exe" --attach {pid}`}
         />
-        <p className="hint">When enabled, Account Manager turns on Potassium Auto Attach, installs an autoexec Cloud.lua loader, and tries attach after each launch. Potassium must be installed.</p>
+        <p className="hint">Starts Potassium if needed, turns on Potassium auto-attach, and clicks “Attach to running clients” after each launch. Does not run Cloud.lua — inject that yourself on the clients that should have the UI.</p>
 
         <h2 className="modal-section">Hive / CloudFarm</h2>
         <p className="hint">
