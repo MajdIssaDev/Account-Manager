@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import type { AccountPublic, HiveInventoryItem, HiveSendManyResult } from "../shared/types";
+import type { AccountPublic, HiveSendManyResult } from "../shared/types";
+import { itemsFromResult } from "./hiveInventoryUtils";
 
 type UnionRow = {
   name: string;
@@ -8,17 +9,6 @@ type UnionRow = {
   total: number;
   included: boolean;
 };
-
-function itemsFromResult(result: HiveSendManyResult): HiveInventoryItem[] {
-  const raw = result.data?.items;
-  const list = Array.isArray(raw)
-    ? raw
-    : raw && typeof raw === "object"
-      ? Object.values(raw)
-      : [];
-  return list.filter((row) => row && typeof row === "object") as HiveInventoryItem[];
-}
-
 export default function HiveButModal(props: {
   kind: "sell" | "eat";
   accounts: AccountPublic[];

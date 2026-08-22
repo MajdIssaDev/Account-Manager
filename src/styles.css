@@ -1381,6 +1381,42 @@ textarea:focus {
   font-size: 12px;
 }
 
+.hive-catalog-slider-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hive-slider-value {
+  min-width: 2.75em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.hive-bgfish-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.hive-bgfish-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.hive-bgfish-field select {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
 .hive-catalog-row.disabled {
   opacity: 0.55;
 }

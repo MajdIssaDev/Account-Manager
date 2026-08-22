@@ -8,7 +8,9 @@ import type {
   HiveSession,
 } from "../shared/types";
 import { HIVE_STARTABLE_JOBS } from "../shared/types";
+import HiveBackgroundFishModal from "./HiveBackgroundFishModal";
 import HiveButModal from "./HiveButModal";
+import HiveCatalogSlider from "./HiveCatalogSlider";
 import HiveFanoutResults from "./HiveFanoutResults";
 import { applyFpsCap, loadFpsCapState, startPlaylistWithDedupe } from "./hiveCoordination";
 import { useHiveTarget } from "./useHiveTarget";
@@ -168,20 +170,11 @@ function CatalogTab(props: {
                         </label>
                       ) : null}
                       {c.remote === "slider" ? (
-                        <input
-                          type="range"
-                          className="hive-slider"
-                          min={c.min ?? 0}
-                          max={c.max ?? 100}
-                          step={c.isInt ? 1 : 0.1}
-                          defaultValue={String(c.min ?? 0)}
-                          disabled={props.busy}
-                          onMouseUp={(e) =>
-                            void fan("slider.set", { id: c.id, value: Number((e.target as HTMLInputElement).value) })
-                          }
-                          onTouchEnd={(e) =>
-                            void fan("slider.set", { id: c.id, value: Number((e.target as HTMLInputElement).value) })
-                          }
+                        <HiveCatalogSlider
+                          control={c}
+                          accountId={props.connected[0]?.id}
+                          busy={props.busy}
+                          onCommit={(id, value) => void fan("slider.set", { id, value })}
                         />
                       ) : null}
                       {c.remote === "button" ? (
@@ -381,6 +374,7 @@ export default function HivePanel(props: {
 }) {
   const [tab, setTab] = useState<TabId>("overview");
   const [butKind, setButKind] = useState<"sell" | "eat" | null>(null);
+  const [bgFishOpen, setBgFishOpen] = useState(false);
   const [sessions, setSessions] = useState<HiveSession[]>([]);
   const [ledger, setLedger] = useState<HiveServerLedgerEntry[]>([]);
 
@@ -418,6 +412,10 @@ export default function HivePanel(props: {
         "Start afk_playlist",
         await startPlaylistWithDedupe(hive.connected, hive.sendMany, props.onToast),
       );
+      return;
+    }
+    if (jobId === "background_fish") {
+      setBgFishOpen(true);
       return;
     }
     toastBatch(`Start ${jobId}`, await hive.sendMany("jobs.start", { job: jobId }));
@@ -497,7 +495,7 @@ export default function HivePanel(props: {
                   <span>{job.label}</span>
                   <div className="hive-job-btns">
                     <button type="button" className="btn" disabled={hive.busy} onClick={() => void startJob(job.id)}>
-                      Start
+                      {job.id === "background_fish" ? "Start…" : "Start"}
                     </button>
                     <button type="button" className="btn" disabled={hive.busy} onClick={() => void stopJob(job.id)}>
                       Stop
@@ -560,6 +558,16 @@ export default function HivePanel(props: {
           onDone={(summary) => {
             props.onToast(summary);
             setButKind(null);
+          }}
+        />
+      ) : null}
+      {bgFishOpen ? (
+        <HiveBackgroundFishModal
+          accounts={hive.connected}
+          onClose={() => setBgFishOpen(false)}
+          onDone={(summary) => {
+            props.onToast(summary);
+            setBgFishOpen(false);
           }}
         />
       ) : null}

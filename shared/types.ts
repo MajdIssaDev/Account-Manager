@@ -102,6 +102,7 @@ export type HiveCatalogControl = {
   category: string;
   controlType: string;
   toggleId?: string;
+  default?: number;
   min?: number;
   max?: number;
   isInt?: boolean;
