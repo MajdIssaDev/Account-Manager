@@ -49,7 +49,7 @@ export default function SettingsModal(props: {
   const update = props.update;
 
   return (
-    <div className="overlay" onMouseDown={props.onClose}>
+    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
       <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>Settings</h2>
         <label>Roblox folder</label>

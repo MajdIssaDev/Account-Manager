@@ -17,7 +17,7 @@ export default function NewLabelModal(props: {
   };
 
   return (
-    <div className="overlay" onMouseDown={props.onClose}>
+    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
       <div className="modal modal-sm" onMouseDown={(e) => e.stopPropagation()}>
         <h2>New label</h2>
         <label>Name</label>

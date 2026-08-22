@@ -49,7 +49,7 @@ export default function AddAccountModal(props: {
   };
 
   return (
-    <div className="overlay" onMouseDown={() => { if (!busy) props.onClose(); }}>
+    <div className="overlay" onMouseDown={(e) => { if (!busy && e.target === e.currentTarget) props.onClose(); }}>
       <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>Add account</h2>
         <p className="hint">

@@ -170,13 +170,41 @@ export type FarmingStackConfig = {
   speedPreset: ChestFarmSpeed;
   fish: boolean;
   passive: boolean;
+  rejoinSeconds: number;
 };
 
 export const DEFAULT_FARMING_STACK: FarmingStackConfig = {
   speedPreset: "Default",
   fish: true,
   passive: true,
+  rejoinSeconds: 7200,
 };
+
+export const FARM_REJOIN_SECONDS_MIN = 30;
+export const FARM_REJOIN_SECONDS_MAX = 86400;
+
+export function clampFarmRejoinSeconds(value: unknown): number {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n)) {
+    return DEFAULT_FARMING_STACK.rejoinSeconds;
+  }
+  return Math.min(FARM_REJOIN_SECONDS_MAX, Math.max(FARM_REJOIN_SECONDS_MIN, n));
+}
+
+export function formatFarmRejoinSeconds(seconds: number): string {
+  const sec = clampFarmRejoinSeconds(seconds);
+  if (sec >= 3600) {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return m > 0 ? `${h}h ${m}m` : `${h}h`;
+  }
+  if (sec >= 60) {
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  }
+  return `${sec}s`;
+}
 
 export function normalizeFarmingStack(raw?: Partial<FarmingStackConfig> | null): FarmingStackConfig {
   const speed = raw?.speedPreset;
@@ -185,6 +213,7 @@ export function normalizeFarmingStack(raw?: Partial<FarmingStackConfig> | null):
     speedPreset: ok ? (speed as ChestFarmSpeed) : DEFAULT_FARMING_STACK.speedPreset,
     fish: raw?.fish !== false,
     passive: raw?.passive !== false,
+    rejoinSeconds: clampFarmRejoinSeconds(raw?.rejoinSeconds),
   };
 }
 
@@ -195,13 +224,14 @@ export function farmingStackHivePayload(cfg: FarmingStackConfig): Record<string,
     speedPreset: stack.speedPreset,
     fish: stack.fish,
     passive: stack.passive,
-    chest: { speedPreset: stack.speedPreset },
+    rejoinSeconds: stack.rejoinSeconds,
+    chest: { speedPreset: stack.speedPreset, rejoinSeconds: stack.rejoinSeconds },
   };
 }
 
 export function describeFarmingStack(cfg: FarmingStackConfig): string {
   const stack = normalizeFarmingStack(cfg);
-  const parts = [stack.speedPreset];
+  const parts = [stack.speedPreset, `rejoin ${formatFarmRejoinSeconds(stack.rejoinSeconds)}`];
   if (stack.fish) {
     parts.push("fishing");
   }

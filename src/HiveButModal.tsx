@@ -108,7 +108,7 @@ export default function HiveButModal(props: {
   };
 
   return (
-    <div className="overlay" onMouseDown={props.onClose}>
+    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
       <div className="modal modal-wide" onMouseDown={(e) => e.stopPropagation()}>
         <h2>{title}</h2>
         <p className="hint">

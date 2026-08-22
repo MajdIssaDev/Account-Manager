@@ -7,7 +7,7 @@ export default function ConfirmDialog(props: {
   onConfirm: () => void;
 }) {
   return (
-    <div className="overlay" onMouseDown={props.onCancel}>
+    <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) props.onCancel(); }}>
       <div className="modal modal-sm" onMouseDown={(e) => e.stopPropagation()}>
         <h2>{props.title}</h2>
         <p className="hint">{props.body}</p>
