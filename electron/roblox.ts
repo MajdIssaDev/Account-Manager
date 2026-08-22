@@ -131,6 +131,39 @@ export function findRobloxPlayer(explicitPath?: string): string | null {
   return newestPlayerIn(defaultRobloxVersionsDir());
 }
 
+function playerDir(exe: string): string {
+  return join(exe, "..");
+}
+
+async function runningPlayerExe(): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-Command",
+        "(Get-Process -Name 'RobloxPlayerBeta' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path)",
+      ],
+      { windowsHide: true, timeout: 6000 },
+    );
+    const path = stdout.trim();
+    if (path && existsSync(path) && path.toLowerCase().endsWith("robloxplayerbeta.exe")) {
+      return path;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+export async function resolveRobloxPlayerForLaunch(): Promise<string | null> {
+  const running = await runningPlayerExe();
+  if (running) {
+    return running;
+  }
+  return resolveRobloxPlayer();
+}
+
 export function resolveRobloxPlayer(): string | null {
   const settings = getSettings();
   const pick = (path: string | null): string | null => {
@@ -175,12 +208,56 @@ async function killInstallersNow(): Promise<boolean> {
   return killed;
 }
 
-async function waitUntilAppears(before: number[], timeoutMs = 30000): Promise<number> {
+/** Kill orphan installer processes once at least one player is already up. */
+async function cleanupInstallerSplash(): Promise<void> {
+  const players = await listProcessPids(PLAYER);
+  if (!players.length) {
+    return;
+  }
+  await killInstallersNow();
+}
+
+/** Hide Roblox bootstrap/updater windows while the player process starts. */
+async function hideInstallerWindows(): Promise<void> {
+  const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class RamHide {
+  public delegate bool EnumProc(IntPtr hWnd, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int n);
+}
+"@
+$pids = @()
+foreach ($n in @('RobloxPlayerInstaller','RobloxStudioInstaller')) {
+  Get-Process -Name $n -ErrorAction SilentlyContinue | ForEach-Object { $pids += $_.Id }
+}
+if ($pids.Count -eq 0) { exit 0 }
+[RamHide]::EnumWindows({ param($h,$l)
+  if (-not [RamHide]::IsWindowVisible($h)) { return $true }
+  [uint32]$wp = 0
+  [RamHide]::GetWindowThreadProcessId($h, [ref]$wp) | Out-Null
+  if ($pids -contains [int]$wp) { [RamHide]::ShowWindow($h, 0) | Out-Null }
+  return $true
+}, [IntPtr]::Zero) | Out-Null
+`.trim();
+  await execFileAsync(
+    "powershell.exe",
+    ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", script],
+    { windowsHide: true, timeout: 5000 },
+  ).catch(() => undefined);
+}
+
+async function waitUntilAppears(before: number[], timeoutMs = 45000): Promise<number> {
   const start = Date.now();
   let candidate: number | null = null;
   let seenAt = 0;
-  let installerKills = 0;
   while (Date.now() - start < timeoutMs) {
+    await hideInstallerWindows();
     const now = await listProcessPids(PLAYER);
     const fresh = now.filter((p) => !before.includes(p) && isPidAlive(p));
     if (fresh.length) {
@@ -193,13 +270,6 @@ async function waitUntilAppears(before: number[], timeoutMs = 30000): Promise<nu
       }
     } else {
       candidate = null;
-      // Only clear installers when no new player showed up yet.
-      if (Date.now() - start > 2500 && installerKills < 4) {
-        if (await killInstallersNow()) {
-          installerKills += 1;
-          releaseRobloxSingleton();
-        }
-      }
     }
     await sleep(100);
   }
@@ -209,14 +279,15 @@ async function waitUntilAppears(before: number[], timeoutMs = 30000): Promise<nu
 async function waitUntilStable(
   initial: number,
   before: number[],
-  holdMs = 3000,
-  timeoutMs = 35000,
+  holdMs = 3500,
+  timeoutMs = 45000,
 ): Promise<number> {
   const start = Date.now();
   let current = initial;
   let heldAt = Date.now();
   let missing = 0;
   while (Date.now() - start < timeoutMs) {
+    await hideInstallerWindows();
     const now = await listProcessPids(PLAYER);
     const fresh = now.filter((p) => !before.includes(p) && isPidAlive(p));
     if (!fresh.includes(current)) {
@@ -338,7 +409,7 @@ export function setPersistentUnlock(enabled: boolean): void {
 
 /** Called between queued launches: unlock existing clients, then wait. */
 export async function prepareNextLaunch(): Promise<void> {
-  await killInstallersNow();
+  await cleanupInstallerSplash();
   beginSingletonWatch();
   try {
     await unlockUntilReady(16);
@@ -359,14 +430,19 @@ function spawnPlayer(exe: string, ticket: string): void {
       "--launchtime",
       String(Date.now()),
     ],
-    { detached: true, stdio: "ignore", windowsHide: false },
+    {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+      cwd: playerDir(exe),
+    },
   );
   child.unref();
 }
 
 export async function launchAccount(cookieEnc: string): Promise<number> {
   const settings = getSettings();
-  const exe = resolveRobloxPlayer();
+  const exe = await resolveRobloxPlayerForLaunch();
   if (!exe) {
     throw new Error(
       settings.useDefaultRobloxFolder
@@ -384,9 +460,6 @@ export async function launchAccount(cookieEnc: string): Promise<number> {
   const cookie = decryptCookie(cookieEnc);
   const ticket = await createAuthenticationTicket(cookie);
 
-  // Clear leftover installers without touching RobloxPlayerBeta trees.
-  await killInstallersNow();
-
   const before = await listProcessPids(PLAYER);
   beginSingletonWatch();
   try {
@@ -396,6 +469,9 @@ export async function launchAccount(cookieEnc: string): Promise<number> {
 
     const appeared = await waitUntilAppears(before);
     const stable = await waitUntilStable(appeared, before);
+
+    // Dismiss leftover bootstrap splash once the player is alive.
+    await cleanupInstallerSplash();
 
     // Make sure THIS new client's singleton is released before the queue starts the next one.
     await unlockUntilReady(12);
