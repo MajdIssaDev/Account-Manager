@@ -10,6 +10,7 @@ import type {
 import { HIVE_STARTABLE_JOBS } from "../shared/types";
 import HiveButModal from "./HiveButModal";
 import HiveFanoutResults from "./HiveFanoutResults";
+import { applyFpsCap, loadFpsCapState, startPlaylistWithDedupe } from "./hiveCoordination";
 import { useHiveTarget } from "./useHiveTarget";
 
 type TabId = "overview" | "jobs" | "catalog" | "inventory" | "servers";
@@ -301,33 +302,15 @@ function PerformanceSection(props: {
     if (props.connected.length === 0) {
       return;
     }
-    void window.ram
-      .hiveSend({
-        accountId: props.connected[0].id,
-        op: "fps.get",
-        timeoutMs: 12000,
-      })
-      .then((res) => {
-        const data = res.data?.data as Record<string, unknown> | undefined;
-        if (!res.ok || !data) {
-          return;
-        }
-        setEnabled(data.alwaysEnabled === true);
-        setCap(Math.max(15, Math.min(60, Number(data.cap) || 20)));
-        if (data.setfpscapAvailable === false) {
-          setWarn("setfpscap is not available on the first client — FPS cap may not work.");
-        } else {
-          setWarn(null);
-        }
-      });
+    void loadFpsCapState(props.connected[0].id).then((state) => {
+      setEnabled(state.enabled);
+      setCap(state.cap);
+      setWarn(null);
+    });
   }, [props.connected]);
 
   const apply = async (nextEnabled: boolean, nextCap: number) => {
-    const batch = await props.sendMany("fps.configure", {
-      enabled: nextEnabled,
-      always: nextEnabled,
-      cap: nextCap,
-    });
+    const batch = await applyFpsCap(props.sendMany, nextEnabled, nextCap);
     if (batch) {
       setEnabled(nextEnabled);
       setCap(nextCap);
@@ -338,7 +321,7 @@ function PerformanceSection(props: {
     <div className="hive-perf">
       <h3 className="hive-perf-title">Performance</h3>
       <p className="hint">
-        Always-on FPS cap via setfpscap. Use 15–20 for multi-box farming; chest logic does not need high FPS.
+        FPS cap via script toggles (works on background clients). Use 15–20 for multi-box farming.
       </p>
       <label className="hive-perf-row attach">
         <input
@@ -430,6 +413,13 @@ export default function HivePanel(props: {
   };
 
   const startJob = async (jobId: string) => {
+    if (jobId === "afk_playlist") {
+      toastBatch(
+        "Start afk_playlist",
+        await startPlaylistWithDedupe(hive.connected, hive.sendMany, props.onToast),
+      );
+      return;
+    }
     toastBatch(`Start ${jobId}`, await hive.sendMany("jobs.start", { job: jobId }));
   };
 
