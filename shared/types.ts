@@ -57,6 +57,7 @@ export const LABEL_SWATCHES = [
 
 export type HiveSession = {
   userId: number;
+  username?: string;
   liveness: HiveLiveness;
   connected: boolean;
   alive: boolean;

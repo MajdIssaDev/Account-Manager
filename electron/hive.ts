@@ -159,21 +159,29 @@ function livenessFromHeartbeat(connected: boolean, alive: boolean, last: number,
   return "offline";
 }
 
-function classify(raw: Record<string, unknown>, filePath: string, now: number, ttl: number): HiveSession | null {
-  const userId = Number(raw.robloxUserId ?? raw.userId);
+function classify(raw: Record<string, unknown>, filePath: string, now: number, ttl: number, mtimeMs?: number): HiveSession | null {
+  const nested =
+    raw.status && typeof raw.status === "object" ? (raw.status as Record<string, unknown>) : {};
+  const userId = Number(raw.robloxUserId ?? raw.userId ?? nested.robloxUserId);
   if (!Number.isFinite(userId) || userId <= 0) {
     return null;
   }
   const connected = raw.connected !== false;
   const alive = raw.alive !== false;
-  const last =
-    parseTimeMs(raw.lastHeartbeatAtMs) ||
-    parseTimeMs(raw.lastHeartbeatAt) ||
-    parseTimeMs(raw.updatedAt) ||
-    0;
+  const last = Math.max(
+    parseTimeMs(raw.lastHeartbeatAtMs),
+    parseTimeMs(raw.lastHeartbeatAt),
+    parseTimeMs(raw.updatedAt),
+    parseTimeMs(nested.lastHeartbeatAtMs),
+    parseTimeMs(nested.lastHeartbeatAt),
+    Number.isFinite(mtimeMs) ? Math.floor(mtimeMs as number) : 0,
+  );
+  const usernameRaw = raw.username ?? nested.username;
+  const username = typeof usernameRaw === "string" && usernameRaw !== "" ? usernameRaw : undefined;
   const liveness = livenessFromHeartbeat(connected, alive, last, now, ttl);
   return {
     userId: Math.floor(userId),
+    username,
     liveness,
     connected,
     alive,
@@ -196,10 +204,10 @@ function sessionFingerprint(list: HiveSession[]): string {
     .join("|");
 }
 
-function readSessionFile(filePath: string, now: number, ttl: number): HiveSession | null {
+function readSessionFile(filePath: string, now: number, ttl: number, mtimeMs?: number): HiveSession | null {
   try {
     const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
-    return classify(parsed, filePath, now, ttl);
+    return classify(parsed, filePath, now, ttl, mtimeMs);
   } catch {
     return null;
   }
@@ -256,7 +264,7 @@ function scanSessions(forceFull = false): HiveSession[] {
       continue;
     }
     sessionFileStats.set(filePath, stat);
-    const session = readSessionFile(filePath, now, ttl);
+    const session = readSessionFile(filePath, now, ttl, stat.mtimeMs);
     if (session) {
       sessions.set(session.userId, session);
       sessionPathByUserId.set(session.userId, filePath);
@@ -592,12 +600,24 @@ export function getSession(userId: number): HiveSession | undefined {
   return sessions.get(userId);
 }
 
-export function livenessFor(userId: number): HiveLiveness {
+export function livenessFor(userId: number, username?: string): HiveLiveness {
   const id = Math.floor(Number(userId));
-  if (!Number.isFinite(id) || id <= 0) {
-    return "offline";
+  const byId = Number.isFinite(id) && id > 0 ? sessions.get(id)?.liveness : undefined;
+  const needle = String(username || "").trim().toLowerCase();
+  let byName: HiveLiveness | undefined;
+  if (needle) {
+    for (const session of sessions.values()) {
+      if (session.username && session.username.toLowerCase() === needle) {
+        byName = session.liveness;
+        break;
+      }
+    }
   }
-  return sessions.get(id)?.liveness || "offline";
+  const rank = (status?: HiveLiveness) => (status === "connected" ? 2 : status === "stale" ? 1 : 0);
+  if (rank(byName) > rank(byId)) {
+    return byName || "offline";
+  }
+  return byId || "offline";
 }
 
 const SEA_PLACE_IDS = new Set([12604352060, 15449776494]);

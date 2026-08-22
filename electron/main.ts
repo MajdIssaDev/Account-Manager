@@ -177,7 +177,7 @@ function publicAccounts(): AccountPublic[] {
       labelIds: a.labelIds || [],
       inactive: Boolean(a.inactive),
       sortOrder: typeof a.sortOrder === "number" ? a.sortOrder : 0,
-      hiveStatus: livenessFor(a.userId),
+      hiveStatus: livenessFor(a.userId, a.username),
     };
   });
 }
