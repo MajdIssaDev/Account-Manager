@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent,
 import type { AccountPublic, AppSettings, UpdateState } from "../shared/types";
 import { DEFAULT_LABELS } from "../shared/types";
 import AddAccountModal from "./AddAccountModal";
+import HiveButModal from "./HiveButModal";
 import SettingsModal from "./SettingsModal";
 import AccountCard from "./AccountCard";
 import ConfirmDialog from "./ConfirmDialog";
@@ -10,6 +11,7 @@ import Tutorial from "./Tutorial";
 import TitleBarControls from "./TitleBarControls";
 import ContextMenu, { type CtxItem } from "./ContextMenu";
 import NewLabelModal from "./NewLabelModal";
+import HivePanel from "./HivePanel";
 import { IconAddUser, IconGear, IconInfo, IconStop } from "./icons";
 
 function updateChip(state: UpdateState | null): { label: string; kind: string } {
@@ -59,6 +61,8 @@ export default function App() {
   const skipPickRef = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number; ids: string[] } | null>(null);
   const [newLabelFor, setNewLabelFor] = useState<string[] | null>(null);
+  const [hiveOpen, setHiveOpen] = useState(false);
+  const [hiveButKind, setHiveButKind] = useState<"sell" | "eat" | null>(null);
 
   useEffect(() => {
     void window.ram.listAccounts().then(setAccounts);
@@ -153,6 +157,10 @@ export default function App() {
   }, [accounts, filterLabels, showInactive]);
 
   const selectedVisible = selectedIds.filter((id) => visible.some((a) => a.id === id));
+  const selectedConnected = useMemo(
+    () => visible.filter((a) => selectedIds.includes(a.id) && a.hiveStatus === "connected"),
+    [visible, selectedIds],
+  );
   const chip = updateChip(update);
 
   const [dragIds, setDragIds] = useState<string[] | null>(null);
@@ -704,6 +712,15 @@ export default function App() {
         </button>
         <button
           type="button"
+          className="btn hive-head-btn"
+          disabled={selectedConnected.length === 0}
+          title={selectedConnected.length === 0 ? "Select connected hive clients" : "Hive control"}
+          onClick={() => setHiveOpen(true)}
+        >
+          Hive{selectedConnected.length > 0 ? ` (${selectedConnected.length})` : ""}
+        </button>
+        <button
+          type="button"
           className="icon-btn primary"
           data-tour="add-account"
           aria-label="Add account"
@@ -854,6 +871,27 @@ export default function App() {
               >
                 Launch selected
               </button>
+              <button
+                className="btn"
+                disabled={selectedConnected.length === 0}
+                onClick={() => setHiveOpen(true)}
+              >
+                Hive
+              </button>
+              <button
+                className="btn"
+                disabled={selectedConnected.length === 0}
+                onClick={() => setHiveButKind("sell")}
+              >
+                Sell all…
+              </button>
+              <button
+                className="btn"
+                disabled={selectedConnected.length === 0}
+                onClick={() => setHiveButKind("eat")}
+              >
+                Eat all…
+              </button>
             </div>
           ) : null}
         </div>
@@ -906,6 +944,25 @@ export default function App() {
           }}
         />
       )}
+      {hiveOpen ? (
+        <HivePanel
+          accounts={accounts}
+          selectedIds={selectedIds}
+          onClose={() => setHiveOpen(false)}
+          onToast={show}
+        />
+      ) : null}
+      {hiveButKind ? (
+        <HiveButModal
+          kind={hiveButKind}
+          accounts={selectedConnected}
+          onClose={() => setHiveButKind(null)}
+          onDone={(summary) => {
+            show(summary);
+            setHiveButKind(null);
+          }}
+        />
+      ) : null}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems(menu.ids)} onClose={() => setMenu(null)} />}
       {tourOpen && <Tutorial allowSkip={tourSkip} onEnd={() => void endTour()} />}
       {toast && <div className="toast">{toast}</div>}

@@ -16,20 +16,27 @@ import type {
   HiveCommandResult,
   HiveLiveness,
   HiveSendManyResult,
+  HiveServerLedgerEntry,
+  HiveServerVerdict,
   HiveSession,
 } from "../shared/types";
 
 type HiveHooks = {
   getSettings: () => AppSettings;
   onChange: (sessions: HiveSession[]) => void;
+  onLedgerChange: (entries: HiveServerLedgerEntry[]) => void;
 };
 
 let hooks: HiveHooks | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let watcher: FSWatcher | null = null;
+let ledgerWatcher: FSWatcher | null = null;
 let watchedDir = "";
+let watchedLedgerDir = "";
 let lastFingerprint = "";
+let lastLedgerFingerprint = "";
 const sessions = new Map<number, HiveSession>();
+const ledgerEntries: HiveServerLedgerEntry[] = [];
 
 export function hiveWorkspacePath(settings?: AppSettings): string {
   const explicit = String(settings?.hiveWorkspacePath || hooks?.getSettings().hiveWorkspacePath || "").trim();
@@ -90,6 +97,9 @@ function classify(raw: Record<string, unknown>, filePath: string, now: number, t
     sessionId: typeof raw.sessionId === "string" ? raw.sessionId : undefined,
     placeId: Number(raw.placeId) || undefined,
     jobId: typeof raw.jobId === "string" ? raw.jobId : undefined,
+    serverVerdict: typeof raw.serverVerdict === "string" ? (raw.serverVerdict as HiveServerVerdict) : undefined,
+    serverReason: typeof raw.serverReason === "string" ? raw.serverReason : undefined,
+    threatLevel: Number(raw.threatLevel) || undefined,
     path: filePath,
   };
 }
@@ -141,6 +151,7 @@ function emitIfChanged(force = false): HiveSession[] {
     lastFingerprint = next;
     hooks?.onChange(list);
   }
+  emitLedgerIfChanged(force);
   return list;
 }
 
@@ -171,6 +182,142 @@ function attachWatcher(): void {
 
 export function listSessions(): HiveSession[] {
   return Array.from(sessions.values()).sort((a, b) => a.userId - b.userId);
+}
+
+function latestReasonFromReports(reports: unknown): string | undefined {
+  if (!Array.isArray(reports)) {
+    return undefined;
+  }
+  let bestAt = 0;
+  let bestReason: string | undefined;
+  for (const row of reports) {
+    if (row && typeof row === "object") {
+      const at = Number((row as { at?: number }).at) || 0;
+      const reason = (row as { reason?: string }).reason;
+      if (at >= bestAt && typeof reason === "string" && reason !== "") {
+        bestAt = at;
+        bestReason = reason;
+      }
+    }
+  }
+  return bestReason;
+}
+
+function parseLedgerFile(filePath: string): HiveServerLedgerEntry | null {
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    const placeId = Number(parsed.placeId);
+    const jobId = typeof parsed.jobId === "string" ? parsed.jobId : "";
+    if (!Number.isFinite(placeId) || placeId <= 0 || !jobId) {
+      return null;
+    }
+    const reports = Array.isArray(parsed.reports) ? parsed.reports : [];
+    return {
+      placeId: Math.floor(placeId),
+      jobId,
+      verdict: (typeof parsed.verdict === "string" ? parsed.verdict : "unknown") as HiveServerVerdict,
+      good: Number(parsed.good) || 0,
+      bad: Number(parsed.bad) || 0,
+      neutral: Number(parsed.neutral) || 0,
+      reports: reports as HiveServerLedgerEntry["reports"],
+      updatedAt:
+        Number(parsed.updatedAt) > 1e12
+          ? Math.floor(Number(parsed.updatedAt) / 1000)
+          : Number(parsed.updatedAt) || 0,
+      path: filePath,
+      latestReason:
+        typeof parsed.latestReason === "string"
+          ? parsed.latestReason
+          : latestReasonFromReports(reports),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function scanLedger(): HiveServerLedgerEntry[] {
+  const root = join(hiveRoot(), "servers");
+  const next: HiveServerLedgerEntry[] = [];
+  if (!existsSync(root)) {
+    ledgerEntries.length = 0;
+    return next;
+  }
+  let placeDirs: string[] = [];
+  try {
+    placeDirs = readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => join(root, d.name));
+  } catch {
+    placeDirs = [];
+  }
+  for (const placeDir of placeDirs) {
+    let files: string[] = [];
+    try {
+      files = readdirSync(placeDir).filter((name) => name.toLowerCase().endsWith(".json"));
+    } catch {
+      files = [];
+    }
+    for (const name of files) {
+      const entry = parseLedgerFile(join(placeDir, name));
+      if (entry) {
+        next.push(entry);
+      }
+    }
+  }
+  next.sort((a, b) => b.updatedAt - a.updatedAt);
+  ledgerEntries.length = 0;
+  ledgerEntries.push(...next);
+  return next;
+}
+
+function ledgerFingerprint(list: HiveServerLedgerEntry[]): string {
+  return list
+    .map((e) => `${e.placeId}:${e.jobId}:${e.verdict}:${e.updatedAt}`)
+    .sort()
+    .join("|");
+}
+
+function emitLedgerIfChanged(force = false): HiveServerLedgerEntry[] {
+  const list = scanLedger();
+  const next = ledgerFingerprint(list);
+  if (force || next !== lastLedgerFingerprint) {
+    lastLedgerFingerprint = next;
+    hooks?.onLedgerChange(list);
+  }
+  return list;
+}
+
+function attachLedgerWatcher(): void {
+  const dir = join(hiveRoot(), "servers");
+  if (watchedLedgerDir === dir && ledgerWatcher) {
+    return;
+  }
+  if (ledgerWatcher) {
+    ledgerWatcher.close();
+    ledgerWatcher = null;
+  }
+  watchedLedgerDir = dir;
+  if (!existsSync(dir)) {
+    return;
+  }
+  try {
+    ledgerWatcher = watch(dir, { persistent: true, recursive: true }, () => {
+      emitLedgerIfChanged();
+    });
+  } catch {
+    ledgerWatcher = null;
+  }
+}
+
+export function listLedger(): HiveServerLedgerEntry[] {
+  if (ledgerEntries.length === 0) {
+    scanLedger();
+  }
+  return [...ledgerEntries];
+}
+
+export function ledgerSnapshot(): HiveServerLedgerEntry[] {
+  return scanLedger();
 }
 
 export function getSession(userId: number): HiveSession | undefined {
@@ -286,9 +433,12 @@ export function startHiveWatcher(next: HiveHooks): void {
     clearInterval(pollTimer);
   }
   attachWatcher();
+  attachLedgerWatcher();
   emitIfChanged(true);
+  emitLedgerIfChanged(true);
   pollTimer = setInterval(() => {
     attachWatcher();
+    attachLedgerWatcher();
     emitIfChanged();
   }, 1000);
 }
@@ -298,7 +448,9 @@ export function reloadHiveWatcher(): void {
     return;
   }
   attachWatcher();
+  attachLedgerWatcher();
   emitIfChanged(true);
+  emitLedgerIfChanged(true);
 }
 
 export function hiveStatusSnapshot(): HiveSession[] {

@@ -6,6 +6,7 @@ import type {
   AppSettings,
   HiveCommandResult,
   HiveSendManyResult,
+  HiveServerLedgerEntry,
   HiveSession,
   IpcResult,
   LoginMode,
@@ -79,6 +80,7 @@ const api = {
     return () => ipcRenderer.removeListener("settings:changed", listener);
   },
   hiveStatus: (): Promise<HiveSession[]> => ipcRenderer.invoke("hive:status"),
+  hiveLedger: (): Promise<HiveServerLedgerEntry[]> => ipcRenderer.invoke("hive:ledger"),
   hiveWorkspace: (): Promise<string> => ipcRenderer.invoke("hive:workspace"),
   hiveSend: (
     input: { userId?: number; accountId?: string; op: string; payload?: Record<string, unknown>; timeoutMs?: number },
@@ -91,6 +93,11 @@ const api = {
     const listener = (_e: unknown, sessions: HiveSession[]): void => cb(sessions);
     ipcRenderer.on("hive:changed", listener);
     return () => ipcRenderer.removeListener("hive:changed", listener);
+  },
+  onHiveLedgerChanged: (cb: (entries: HiveServerLedgerEntry[]) => void): (() => void) => {
+    const listener = (_e: unknown, entries: HiveServerLedgerEntry[]): void => cb(entries);
+    ipcRenderer.on("hive:ledgerChanged", listener);
+    return () => ipcRenderer.removeListener("hive:ledgerChanged", listener);
   },
   onMaximized: (cb: (maximized: boolean) => void): (() => void) => {
     const listener = (_e: unknown, maximized: boolean): void => cb(maximized);

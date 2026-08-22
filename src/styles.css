@@ -1154,6 +1154,258 @@ textarea:focus {
   overflow: auto;
 }
 
+.hive-head-btn {
+  margin-left: auto;
+  margin-right: 4px;
+}
+
+.hive-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 90;
+}
+
+.hive-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(420px, 100vw);
+  height: 100vh;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  z-index: 91;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+}
+
+.hive-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.hive-drawer-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.hive-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+
+.hive-tab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hive-tab.on {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--btn-bg);
+}
+
+.hive-tab-body {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 14px;
+}
+
+.hive-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.hive-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.hive-search {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: var(--btn-bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+
+.hive-catalog-cat {
+  margin-bottom: 8px;
+}
+
+.hive-catalog-cat-head {
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-weight: 650;
+  font-size: 12px;
+  padding: 6px 2px;
+  cursor: pointer;
+}
+
+.hive-catalog-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 8px;
+}
+
+.hive-catalog-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+
+.hive-catalog-row.disabled {
+  opacity: 0.55;
+}
+
+.hive-catalog-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hive-muted {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.hive-slider {
+  width: 120px;
+}
+
+.hive-job-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.hive-job-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.hive-job-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.hive-results {
+  margin-top: 10px;
+}
+
+.hive-results-head {
+  margin-bottom: 4px;
+}
+
+.hive-result-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hive-result-row {
+  margin: 0;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.hive-result-row.ok {
+  color: var(--accent-cyan);
+}
+
+.hive-result-row.fail {
+  color: var(--danger);
+}
+
+.hive-server-table {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.hive-server-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--btn-bg);
+}
+
+.hive-server-row.active {
+  border-color: var(--accent-cyan);
+}
+
+.hive-server-job {
+  font-family: var(--font-mono);
+}
+
+.hive-server-reason {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.server-verdict {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.server-verdict-good {
+  background: rgba(94, 234, 212, 0.16);
+  color: var(--accent-cyan);
+}
+
+.server-verdict-bad {
+  background: rgba(255, 107, 122, 0.16);
+  color: var(--danger);
+}
+
+.server-verdict-neutral,
+.server-verdict-unknown,
+.server-verdict-pending {
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--muted);
+}
+
 .pick {
   margin-right: 2px;
 }

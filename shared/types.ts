@@ -64,8 +64,66 @@ export type HiveSession = {
   sessionId?: string;
   placeId?: number;
   jobId?: string;
+  serverVerdict?: HiveServerVerdict;
+  serverReason?: string;
+  threatLevel?: number;
   path: string;
 };
+
+export type HiveServerVerdict = "good" | "bad" | "neutral" | "unknown";
+
+export type HiveServerReport = {
+  robloxUserId: number;
+  username?: string;
+  verdict: HiveServerVerdict;
+  reason?: string;
+  at: number;
+  threatLevel?: number;
+  chestOpened?: number;
+  farmRunning?: boolean;
+};
+
+export type HiveServerLedgerEntry = {
+  placeId: number;
+  jobId: string;
+  verdict: HiveServerVerdict;
+  good: number;
+  bad: number;
+  neutral: number;
+  reports: HiveServerReport[];
+  updatedAt: number;
+  path: string;
+  latestReason?: string;
+};
+
+export type HiveCatalogControl = {
+  id: string;
+  label: string;
+  category: string;
+  controlType: string;
+  toggleId?: string;
+  min?: number;
+  max?: number;
+  isInt?: boolean;
+  primaryButtonId?: string;
+  indexedOnly?: boolean;
+  remote: "toggle" | "slider" | "button" | "job" | "unsupported" | string;
+  jobId?: string;
+};
+
+export const HIVE_STARTABLE_JOBS: { id: string; label: string }[] = [
+  { id: "chest_farm", label: "Chest farm" },
+  { id: "background_fish", label: "Background fish" },
+  { id: "passive_income", label: "Passive income" },
+  { id: "afk_playlist", label: "AFK playlist" },
+  { id: "mass_sell", label: "Mass sell" },
+  { id: "kill_boss", label: "Kill boss" },
+  { id: "kill_dragon", label: "Kill dragon" },
+  { id: "kill_sea", label: "Kill sea" },
+  { id: "treasure_chart", label: "Treasure chart" },
+  { id: "progress_story", label: "Progress story" },
+  { id: "progress_story_engine", label: "Story engine" },
+];
 
 export type HiveCommandResult = {
   v: number;

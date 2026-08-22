@@ -48,7 +48,7 @@ import {
   installUpdate,
   maybeAutoCheck,
 } from "./updater";
-import { startHiveWatcher, reloadHiveWatcher, livenessFor, sendCommand, sendMany, hiveStatusSnapshot, hiveWorkspacePath } from "./hive";
+import { startHiveWatcher, reloadHiveWatcher, livenessFor, sendCommand, sendMany, hiveStatusSnapshot, hiveWorkspacePath, ledgerSnapshot } from "./hive";
 import type {
   AccountPatch,
   AccountPublic,
@@ -767,6 +767,7 @@ function registerIpc(): void {
   ipcMain.handle("window:isMaximized", () => Boolean(mainWindow?.isMaximized()));
 
   ipcMain.handle("hive:status", () => hiveStatusSnapshot());
+  ipcMain.handle("hive:ledger", () => ledgerSnapshot());
   ipcMain.handle("hive:workspace", () => hiveWorkspacePath());
   ipcMain.handle("hive:send", async (_e, input: { userId?: number; accountId?: string; op: string; payload?: Record<string, unknown>; timeoutMs?: number }) => {
     const userId = resolveHiveUserId(input?.accountId, input?.userId);
@@ -801,6 +802,9 @@ app.whenReady().then(async () => {
     onChange: () => {
       emitAccounts();
       mainWindow?.webContents.send("hive:changed", hiveStatusSnapshot());
+    },
+    onLedgerChange: (entries) => {
+      mainWindow?.webContents.send("hive:ledgerChanged", entries);
     },
   });
   const restored = await restoreRuntimes();
