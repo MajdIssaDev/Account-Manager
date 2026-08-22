@@ -1,4 +1,4 @@
-import type { MouseEvent, PointerEvent } from "react";
+import { memo, type MouseEvent, type PointerEvent } from "react";
 import type { AccountLabel, AccountPublic } from "../shared/types";
 
 function formatWhen(iso: string | null): string {
@@ -12,7 +12,7 @@ function formatWhen(iso: string | null): string {
   }
 }
 
-export default function AccountCard(props: {
+export default memo(function AccountCard(props: {
   account: AccountPublic;
   labels: AccountLabel[];
   busy: boolean;
@@ -137,4 +137,17 @@ export default function AccountCard(props: {
       </div>
     </article>
   );
-}
+}, (prev, next) =>
+  prev.account.id === next.account.id &&
+  prev.account.hiveStatus === next.account.hiveStatus &&
+  prev.account.running === next.account.running &&
+  prev.account.inactive === next.account.inactive &&
+  prev.account.displayName === next.account.displayName &&
+  prev.account.lastLoginAt === next.account.lastLoginAt &&
+  prev.account.labelIds.join(",") === next.account.labelIds.join(",") &&
+  prev.busy === next.busy &&
+  prev.selected === next.selected &&
+  prev.error === next.error &&
+  prev.floating === next.floating &&
+  prev.labels === next.labels,
+);

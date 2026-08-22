@@ -5,18 +5,23 @@ import { formatSliderValue } from "./hiveSliderFormat";
 export default function HiveCatalogSlider(props: {
   control: HiveCatalogControl;
   accountId: string | undefined;
+  initialValue?: number;
+  lazy?: boolean;
   busy: boolean;
   onCommit: (id: string, value: number) => void;
 }) {
   const { control: c, accountId } = props;
-  const fallback = c.default ?? c.min ?? 0;
+  const fallback = props.initialValue ?? c.default ?? c.min ?? 0;
   const [value, setValue] = useState(fallback);
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(props.initialValue !== undefined);
 
   useEffect(() => {
-    if (!accountId) {
-      setValue(fallback);
-      setLoaded(false);
+    if (props.initialValue !== undefined && Number.isFinite(props.initialValue)) {
+      setValue(props.initialValue);
+      setLoaded(true);
+      return;
+    }
+    if (!accountId || props.lazy) {
       return;
     }
     setLoaded(false);
@@ -40,7 +45,27 @@ export default function HiveCatalogSlider(props: {
         setValue(fallback);
         setLoaded(true);
       });
-  }, [accountId, c.id, fallback]);
+  }, [accountId, c.id, fallback, props.initialValue, props.lazy]);
+
+  useEffect(() => {
+    if (!props.lazy || !accountId || loaded || props.initialValue !== undefined) {
+      return;
+    }
+    void window.ram
+      .hiveSend({
+        accountId,
+        op: "slider.get",
+        payload: { id: c.id },
+        timeoutMs: 12000,
+      })
+      .then((res) => {
+        const v = Number(res.data?.data?.value);
+        if (Number.isFinite(v)) {
+          setValue(v);
+        }
+        setLoaded(true);
+      });
+  }, [props.lazy, accountId, c.id, loaded, props.initialValue]);
 
   const commit = (next: number) => {
     setValue(next);

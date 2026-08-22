@@ -126,6 +126,16 @@ export const HIVE_STARTABLE_JOBS: { id: string; label: string }[] = [
   { id: "progress_story_engine", label: "Story engine" },
 ];
 
+export type HiveSessionPatch = {
+  userId: number;
+  fields: Partial<Pick<HiveSession, "liveness" | "jobId" | "serverVerdict" | "placeId" | "threatLevel">>;
+};
+
+export type HiveLivenessDelta = {
+  userId: number;
+  hiveStatus: HiveLiveness;
+};
+
 export type HiveCommandResult = {
   v: number;
   id: string;

@@ -16,6 +16,7 @@ export default function HiveButModal(props: {
   onDone: (summary: string) => void;
 }) {
   const { kind, accounts } = props;
+  const accountIdsKey = useMemo(() => accounts.map((a) => a.id).sort().join(","), [accounts]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,6 +28,7 @@ export default function HiveButModal(props: {
 
   useEffect(() => {
     let cancelled = false;
+    const accountIds = accountIdsKey;
     void (async () => {
       setLoading(true);
       setError(null);
@@ -78,7 +80,7 @@ export default function HiveButModal(props: {
     return () => {
       cancelled = true;
     };
-  }, [accounts, kind]);
+  }, [accountIdsKey, kind, accounts]);
 
   const excludeNames = useMemo(() => rows.filter((r) => !r.included).map((r) => r.name), [rows]);
   const includeCount = rows.filter((r) => r.included).length;

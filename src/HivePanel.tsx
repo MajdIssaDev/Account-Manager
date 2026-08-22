@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
   AccountPublic,
@@ -13,6 +13,7 @@ import HiveButModal from "./HiveButModal";
 import HiveCatalogSlider from "./HiveCatalogSlider";
 import HiveFanoutResults from "./HiveFanoutResults";
 import { applyFpsCap, loadFpsCapState, startPlaylistWithDedupe } from "./hiveCoordination";
+import { useHiveStore } from "./hiveStore";
 import { useHiveTarget } from "./useHiveTarget";
 
 type TabId = "overview" | "jobs" | "catalog" | "inventory" | "servers";
@@ -33,27 +34,46 @@ function accountNameMap(accounts: AccountPublic[]): Map<number, string> {
   return m;
 }
 
-function CatalogTab(props: {
+const CatalogTab = memo(function CatalogTab(props: {
+  hidden: boolean;
+  connectedIdsKey: string;
+  firstAccountId: string | undefined;
   connected: AccountPublic[];
   busy: boolean;
   sendMany: ReturnType<typeof useHiveTarget>["sendMany"];
 }) {
   const [controls, setControls] = useState<HiveCatalogControl[]>([]);
+  const [sliderValues, setSliderValues] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [openCats, setOpenCats] = useState<Set<string>>(new Set());
   const [localBatch, setLocalBatch] = useState<HiveSendManyResult[] | null>(null);
+  const loadedKeyRef = useRef("");
 
   const load = useCallback(async () => {
-    if (props.connected.length === 0) {
+    if (!props.firstAccountId) {
       return;
     }
     setLoading(true);
     setError(null);
-    const first = props.connected[0];
+    const snap = await window.ram.hiveSend({
+      accountId: props.firstAccountId,
+      op: "catalog.snapshot",
+      payload: { ensure: true },
+      timeoutMs: 45000,
+    });
+    if (snap.ok && snap.data?.data) {
+      const rawControls = snap.data.data.controls;
+      const list = Array.isArray(rawControls) ? (rawControls as HiveCatalogControl[]) : [];
+      const sliders = snap.data.data.sliders;
+      setControls(list);
+      setSliderValues(typeof sliders === "object" && sliders ? (sliders as Record<string, number>) : {});
+      setLoading(false);
+      return;
+    }
     const res = await window.ram.hiveSend({
-      accountId: first.id,
+      accountId: props.firstAccountId,
       op: "catalog.list",
       payload: { ensure: true },
       timeoutMs: 45000,
@@ -66,18 +86,16 @@ function CatalogTab(props: {
     const raw = res.data.data.controls;
     const list = Array.isArray(raw) ? (raw as HiveCatalogControl[]) : [];
     setControls(list);
-    const cats = new Set<string>();
-    for (const c of list) {
-      if (c.category) {
-        cats.add(c.category);
-      }
-    }
-    setOpenCats(cats);
-  }, [props.connected]);
+    setSliderValues({});
+  }, [props.firstAccountId]);
 
   useEffect(() => {
+    if (!props.firstAccountId || loadedKeyRef.current === props.connectedIdsKey) {
+      return;
+    }
+    loadedKeyRef.current = props.connectedIdsKey;
     void load();
-  }, [load]);
+  }, [props.connectedIdsKey, props.firstAccountId, load]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -111,7 +129,7 @@ function CatalogTab(props: {
   };
 
   return (
-    <div className="hive-tab-body">
+    <div className="hive-tab-body" hidden={props.hidden}>
       <div className="hive-toolbar">
         <input
           className="hive-search"
@@ -172,7 +190,9 @@ function CatalogTab(props: {
                       {c.remote === "slider" ? (
                         <HiveCatalogSlider
                           control={c}
-                          accountId={props.connected[0]?.id}
+                          accountId={props.firstAccountId}
+                          initialValue={sliderValues[c.id]}
+                          lazy={!open}
                           busy={props.busy}
                           onCommit={(id, value) => void fan("slider.set", { id, value })}
                         />
@@ -213,9 +233,9 @@ function CatalogTab(props: {
       ) : null}
     </div>
   );
-}
+});
 
-function ServersTab(props: {
+const ServersTab = memo(function ServersTab(props: {
   ledger: HiveServerLedgerEntry[];
   sessions: HiveSession[];
   connected: AccountPublic[];
@@ -280,10 +300,10 @@ function ServersTab(props: {
       </div>
     </div>
   );
-}
+});
 
 function PerformanceSection(props: {
-  connected: AccountPublic[];
+  firstAccountId: string | undefined;
   busy: boolean;
   sendMany: ReturnType<typeof useHiveTarget>["sendMany"];
 }) {
@@ -292,15 +312,15 @@ function PerformanceSection(props: {
   const [warn, setWarn] = useState<string | null>(null);
 
   useEffect(() => {
-    if (props.connected.length === 0) {
+    if (!props.firstAccountId) {
       return;
     }
-    void loadFpsCapState(props.connected[0].id).then((state) => {
+    void loadFpsCapState(props.firstAccountId).then((state) => {
       setEnabled(state.enabled);
       setCap(state.cap);
       setWarn(null);
     });
-  }, [props.connected]);
+  }, [props.firstAccountId]);
 
   const apply = async (nextEnabled: boolean, nextCap: number) => {
     const batch = await applyFpsCap(props.sendMany, nextEnabled, nextCap);
@@ -320,7 +340,7 @@ function PerformanceSection(props: {
         <input
           type="checkbox"
           checked={enabled}
-          disabled={props.busy || props.connected.length === 0}
+          disabled={props.busy || !props.firstAccountId}
           onChange={(e) => void apply(e.target.checked, cap)}
         />
         Cap FPS on connected clients
@@ -346,7 +366,7 @@ function PerformanceSection(props: {
             key={n}
             type="button"
             className="btn"
-            disabled={props.busy || props.connected.length === 0}
+            disabled={props.busy || !props.firstAccountId}
             onClick={() => void apply(true, n)}
           >
             {n} FPS
@@ -355,7 +375,7 @@ function PerformanceSection(props: {
         <button
           type="button"
           className="btn"
-          disabled={props.busy || props.connected.length === 0}
+          disabled={props.busy || !props.firstAccountId}
           onClick={() => void apply(false, cap)}
         >
           Uncap
@@ -375,20 +395,16 @@ export default function HivePanel(props: {
   const [tab, setTab] = useState<TabId>("overview");
   const [butKind, setButKind] = useState<"sell" | "eat" | null>(null);
   const [bgFishOpen, setBgFishOpen] = useState(false);
-  const [sessions, setSessions] = useState<HiveSession[]>([]);
-  const [ledger, setLedger] = useState<HiveServerLedgerEntry[]>([]);
+  const { sessions, ledger } = useHiveStore();
 
   const hive = useHiveTarget(props.accounts, props.selectedIds);
   const names = useMemo(() => accountNameMap(props.accounts), [props.accounts]);
+  const firstAccountId = hive.connected[0]?.id;
 
   useEffect(() => {
-    void window.ram.hiveStatus().then(setSessions);
-    void window.ram.hiveLedger().then(setLedger);
-    const offH = window.ram.onHiveChanged(setSessions);
-    const offL = window.ram.onHiveLedgerChanged(setLedger);
+    void window.ram.setHivePanelOpen(true);
     return () => {
-      offH();
-      offL();
+      void window.ram.setHivePanelOpen(false);
     };
   }, []);
 
@@ -455,8 +471,7 @@ export default function HivePanel(props: {
           ))}
         </nav>
 
-        {tab === "overview" ? (
-          <div className="hive-tab-body">
+        <div className="hive-tab-body" hidden={tab !== "overview"}>
             <div className="hive-actions">
               <button
                 type="button"
@@ -482,13 +497,11 @@ export default function HivePanel(props: {
                 Status
               </button>
             </div>
-            <PerformanceSection connected={hive.connected} busy={hive.busy} sendMany={hive.sendMany} />
+            <PerformanceSection firstAccountId={firstAccountId} busy={hive.busy} sendMany={hive.sendMany} />
             <HiveFanoutResults batch={hive.lastBatch} accountNames={names} />
-          </div>
-        ) : null}
+        </div>
 
-        {tab === "jobs" ? (
-          <div className="hive-tab-body">
+        <div className="hive-tab-body" hidden={tab !== "jobs"}>
             <div className="hive-job-list">
               {HIVE_STARTABLE_JOBS.map((job) => (
                 <div key={job.id} className="hive-job-row">
@@ -508,15 +521,18 @@ export default function HivePanel(props: {
               Stop all jobs
             </button>
             <HiveFanoutResults batch={hive.lastBatch} accountNames={names} />
-          </div>
-        ) : null}
+        </div>
 
-        {tab === "catalog" ? (
-          <CatalogTab connected={hive.connected} busy={hive.busy} sendMany={hive.sendMany} />
-        ) : null}
+        <CatalogTab
+          hidden={tab !== "catalog"}
+          connectedIdsKey={hive.connectedKey}
+          firstAccountId={firstAccountId}
+          connected={hive.connected}
+          busy={hive.busy}
+          sendMany={hive.sendMany}
+        />
 
-        {tab === "inventory" ? (
-          <div className="hive-tab-body">
+        <div className="hive-tab-body" hidden={tab !== "inventory"}>
             <p className="hint">Union inventory across connected clients, then exclude names to sell/eat.</p>
             <div className="hive-actions">
               <button
@@ -536,10 +552,9 @@ export default function HivePanel(props: {
                 Eat all…
               </button>
             </div>
-          </div>
-        ) : null}
+        </div>
 
-        {tab === "servers" ? (
+        <div hidden={tab !== "servers"}>
           <ServersTab
             ledger={ledger}
             sessions={sessions}
@@ -547,7 +562,7 @@ export default function HivePanel(props: {
             busy={hive.busy}
             sendMany={hive.sendMany}
           />
-        ) : null}
+        </div>
       </aside>
 
       {butKind ? (

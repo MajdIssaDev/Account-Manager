@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { AccountPublic, HiveSendManyResult } from "../shared/types";
 import { intersectItemNames } from "./hiveInventoryUtils";
 
@@ -10,6 +10,7 @@ export default function HiveBackgroundFishModal(props: {
   onDone: (summary: string) => void;
 }) {
   const { accounts } = props;
+  const accountIdsKey = useMemo(() => accounts.map((a) => a.id).sort().join(","), [accounts]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,6 +21,7 @@ export default function HiveBackgroundFishModal(props: {
 
   useEffect(() => {
     let cancelled = false;
+    const accountIds = accounts.map((a) => a.id).sort().join(",");
     void (async () => {
       setLoading(true);
       setError(null);
@@ -51,7 +53,7 @@ export default function HiveBackgroundFishModal(props: {
     return () => {
       cancelled = true;
     };
-  }, [accounts]);
+  }, [accountIdsKey, accounts.length]);
 
   const run = async () => {
     if (!selectedRod) {

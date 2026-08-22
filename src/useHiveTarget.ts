@@ -15,16 +15,26 @@ export function useHiveTarget(accounts: AccountPublic[], selectedIds: string[]) 
     [accounts, selectedIds],
   );
 
-  const connected = useMemo(
-    () => selected.filter((a) => a.hiveStatus === "connected"),
+  const connectedKey = useMemo(
+    () =>
+      selected
+        .filter((a) => a.hiveStatus === "connected")
+        .map((a) => a.id)
+        .sort()
+        .join(","),
     [selected],
   );
 
-  const connectedIds = useMemo(() => connected.map((a) => a.id), [connected]);
+  const connected = useMemo(
+    () => selected.filter((a) => a.hiveStatus === "connected"),
+    [connectedKey, selected],
+  );
+
+  const connectedIds = useMemo(() => connected.map((a) => a.id), [connectedKey, connected]);
 
   const droppedCount = useMemo(
     () => selected.filter((a) => a.hiveStatus !== "connected").length,
-    [selected],
+    [connectedKey, selected],
   );
 
   const sendMany = useCallback(
@@ -65,6 +75,7 @@ export function useHiveTarget(accounts: AccountPublic[], selectedIds: string[]) 
     selected,
     connected,
     connectedIds,
+    connectedKey,
     droppedCount,
     busy,
     lastBatch,

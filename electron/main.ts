@@ -48,7 +48,7 @@ import {
   installUpdate,
   maybeAutoCheck,
 } from "./updater";
-import { startHiveWatcher, reloadHiveWatcher, livenessFor, sendCommand, sendMany, hiveStatusSnapshot, hiveWorkspacePath, ledgerSnapshot } from "./hive";
+import { startHiveWatcher, reloadHiveWatcher, livenessFor, sendCommand, sendMany, hiveStatusSnapshot, hiveWorkspacePath, ledgerSnapshot, setHivePanelOpen, isHivePanelOpen } from "./hive";
 import type {
   AccountPatch,
   AccountPublic,
@@ -766,6 +766,14 @@ function registerIpc(): void {
   });
   ipcMain.handle("window:isMaximized", () => Boolean(mainWindow?.isMaximized()));
 
+  ipcMain.handle("hive:panelOpen", (_e, open: boolean) => {
+    setHivePanelOpen(open === true);
+    if (open === true) {
+      mainWindow?.webContents.send("hive:changed", hiveStatusSnapshot());
+    }
+    return ok(true);
+  });
+
   ipcMain.handle("hive:status", () => hiveStatusSnapshot());
   ipcMain.handle("hive:ledger", () => ledgerSnapshot());
   ipcMain.handle("hive:workspace", () => hiveWorkspacePath());
@@ -799,9 +807,15 @@ app.whenReady().then(async () => {
   registerIpc();
   startHiveWatcher({
     getSettings,
-    onChange: () => {
-      emitAccounts();
-      mainWindow?.webContents.send("hive:changed", hiveStatusSnapshot());
+    isHivePanelOpen,
+    onChange: (sessions) => {
+      mainWindow?.webContents.send("hive:changed", sessions);
+    },
+    onLivenessChange: (deltas) => {
+      mainWindow?.webContents.send("hive:liveness", deltas);
+    },
+    onSessionPatch: (patches) => {
+      mainWindow?.webContents.send("hive:sessionPatch", patches);
     },
     onLedgerChange: (entries) => {
       mainWindow?.webContents.send("hive:ledgerChanged", entries);

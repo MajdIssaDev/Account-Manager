@@ -8,6 +8,8 @@ import type {
   HiveSendManyResult,
   HiveServerLedgerEntry,
   HiveSession,
+  HiveSessionPatch,
+  HiveLivenessDelta,
   IpcResult,
   LoginMode,
   PotassiumStatus,
@@ -89,10 +91,22 @@ const api = {
     input: { userIds?: number[]; accountIds?: string[]; op: string; payload?: Record<string, unknown>; timeoutMs?: number },
   ): Promise<IpcResult<{ dropped: number; results: HiveSendManyResult[] }>> =>
     ipcRenderer.invoke("hive:sendMany", input),
+  setHivePanelOpen: (open: boolean): Promise<IpcResult<boolean>> =>
+    ipcRenderer.invoke("hive:panelOpen", open),
   onHiveChanged: (cb: (sessions: HiveSession[]) => void): (() => void) => {
     const listener = (_e: unknown, sessions: HiveSession[]): void => cb(sessions);
     ipcRenderer.on("hive:changed", listener);
     return () => ipcRenderer.removeListener("hive:changed", listener);
+  },
+  onHiveLivenessChanged: (cb: (deltas: HiveLivenessDelta[]) => void): (() => void) => {
+    const listener = (_e: unknown, deltas: HiveLivenessDelta[]): void => cb(deltas);
+    ipcRenderer.on("hive:liveness", listener);
+    return () => ipcRenderer.removeListener("hive:liveness", listener);
+  },
+  onHiveSessionPatch: (cb: (patches: HiveSessionPatch[]) => void): (() => void) => {
+    const listener = (_e: unknown, patches: HiveSessionPatch[]): void => cb(patches);
+    ipcRenderer.on("hive:sessionPatch", listener);
+    return () => ipcRenderer.removeListener("hive:sessionPatch", listener);
   },
   onHiveLedgerChanged: (cb: (entries: HiveServerLedgerEntry[]) => void): (() => void) => {
     const listener = (_e: unknown, entries: HiveServerLedgerEntry[]): void => cb(entries);

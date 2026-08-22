@@ -12,6 +12,7 @@ import TitleBarControls from "./TitleBarControls";
 import ContextMenu, { type CtxItem } from "./ContextMenu";
 import NewLabelModal from "./NewLabelModal";
 import HivePanel from "./HivePanel";
+import { HiveStoreProvider, patchAccountsHiveStatus } from "./hiveStore";
 import { IconAddUser, IconGear, IconInfo, IconStop } from "./icons";
 
 function updateChip(state: UpdateState | null): { label: string; kind: string } {
@@ -77,6 +78,9 @@ export default function App() {
     void window.ram.getUpdateState().then(setUpdate);
     void window.ram.getLaunchBusy().then(setLaunchBusyIds);
     const offA = window.ram.onAccountsChanged(setAccounts);
+    const offHiveLive = window.ram.onHiveLivenessChanged((deltas) => {
+      setAccounts((prev) => patchAccountsHiveStatus(prev, deltas));
+    });
     const offS = window.ram.onSettingsChanged((s) => {
       setSettings(s);
       applyTheme(s.themeId);
@@ -89,6 +93,7 @@ export default function App() {
     const offL = window.ram.onLaunchBusy(setLaunchBusyIds);
     return () => {
       offA();
+      offHiveLive();
       offS();
       offT();
       offU();
@@ -650,6 +655,7 @@ export default function App() {
     : [];
 
   return (
+    <HiveStoreProvider>
     <div className="app">
       <header className="topbar">
         <div className="brand">
@@ -1016,5 +1022,6 @@ export default function App() {
       {tourOpen && <Tutorial allowSkip={tourSkip} onEnd={() => void endTour()} />}
       {toast && <div className="toast">{toast}</div>}
     </div>
+    </HiveStoreProvider>
   );
 }
