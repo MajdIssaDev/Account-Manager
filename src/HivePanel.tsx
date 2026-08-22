@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   AccountPublic,
   HiveCatalogControl,
@@ -287,6 +288,108 @@ function ServersTab(props: {
   );
 }
 
+function PerformanceSection(props: {
+  connected: AccountPublic[];
+  busy: boolean;
+  sendMany: ReturnType<typeof useHiveTarget>["sendMany"];
+}) {
+  const [enabled, setEnabled] = useState(false);
+  const [cap, setCap] = useState(20);
+  const [warn, setWarn] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (props.connected.length === 0) {
+      return;
+    }
+    void window.ram
+      .hiveSend({
+        accountId: props.connected[0].id,
+        op: "fps.get",
+        timeoutMs: 12000,
+      })
+      .then((res) => {
+        const data = res.data?.data as Record<string, unknown> | undefined;
+        if (!res.ok || !data) {
+          return;
+        }
+        setEnabled(data.alwaysEnabled === true);
+        setCap(Math.max(15, Math.min(60, Number(data.cap) || 20)));
+        if (data.setfpscapAvailable === false) {
+          setWarn("setfpscap is not available on the first client — FPS cap may not work.");
+        } else {
+          setWarn(null);
+        }
+      });
+  }, [props.connected]);
+
+  const apply = async (nextEnabled: boolean, nextCap: number) => {
+    const batch = await props.sendMany("fps.configure", {
+      enabled: nextEnabled,
+      always: nextEnabled,
+      cap: nextCap,
+    });
+    if (batch) {
+      setEnabled(nextEnabled);
+      setCap(nextCap);
+    }
+  };
+
+  return (
+    <div className="hive-perf">
+      <h3 className="hive-perf-title">Performance</h3>
+      <p className="hint">
+        Always-on FPS cap via setfpscap. Use 15–20 for multi-box farming; chest logic does not need high FPS.
+      </p>
+      <label className="hive-perf-row attach">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={props.busy || props.connected.length === 0}
+          onChange={(e) => void apply(e.target.checked, cap)}
+        />
+        Cap FPS on connected clients
+      </label>
+      <div className="hive-perf-row">
+        <span className="hive-perf-cap">{cap} FPS</span>
+        <input
+          type="range"
+          className="hive-slider hive-perf-slider"
+          min={15}
+          max={60}
+          step={1}
+          value={cap}
+          disabled={props.busy || !enabled}
+          onChange={(e) => setCap(Number(e.target.value))}
+          onMouseUp={(e) => void apply(enabled, Number((e.target as HTMLInputElement).value))}
+          onTouchEnd={(e) => void apply(enabled, Number((e.target as HTMLInputElement).value))}
+        />
+      </div>
+      <div className="hive-perf-presets">
+        {[15, 20, 30].map((n) => (
+          <button
+            key={n}
+            type="button"
+            className="btn"
+            disabled={props.busy || props.connected.length === 0}
+            onClick={() => void apply(true, n)}
+          >
+            {n} FPS
+          </button>
+        ))}
+        <button
+          type="button"
+          className="btn"
+          disabled={props.busy || props.connected.length === 0}
+          onClick={() => void apply(false, cap)}
+        >
+          Uncap
+        </button>
+      </div>
+      {warn ? <p className="hint">{warn}</p> : null}
+    </div>
+  );
+}
+
 export default function HivePanel(props: {
   accounts: AccountPublic[];
   selectedIds: string[];
@@ -334,8 +437,8 @@ export default function HivePanel(props: {
     toastBatch(`Stop ${jobId}`, await hive.sendMany("jobs.stop", { job: jobId }));
   };
 
-  return (
-    <>
+  return createPortal(
+    <div className="hive-shell">
       <div className="hive-backdrop" onMouseDown={props.onClose} />
       <aside className="hive-drawer" onMouseDown={(e) => e.stopPropagation()}>
         <header className="hive-drawer-head">
@@ -391,6 +494,7 @@ export default function HivePanel(props: {
                 Status
               </button>
             </div>
+            <PerformanceSection connected={hive.connected} busy={hive.busy} sendMany={hive.sendMany} />
             <HiveFanoutResults batch={hive.lastBatch} accountNames={names} />
           </div>
         ) : null}
@@ -469,6 +573,7 @@ export default function HivePanel(props: {
           }}
         />
       ) : null}
-    </>
+    </div>,
+    document.body,
   );
 }

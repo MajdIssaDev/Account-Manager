@@ -121,7 +121,7 @@ export default function SettingsModal(props: {
           onChange={(e) => setCmd(e.target.value)}
           placeholder={`"C:\\Path\\to\\potassium.exe" --attach {pid}`}
         />
-        <p className="hint">Placeholders: {"{pid}"} and {"{account}"}.</p>
+        <p className="hint">Placeholders: {"{pid}"} and {"{account}"}. Leave empty to auto-use running Potassium with <code>--attach {"{pid}"}</code>.</p>
 
         <h2 className="modal-section">Hive / CloudFarm</h2>
         <p className="hint">

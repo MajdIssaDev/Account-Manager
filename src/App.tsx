@@ -197,6 +197,47 @@ export default function App() {
     return counts;
   }, [accounts, labels]);
 
+  const connectedByLabel = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const label of labels) {
+      counts[label.id] = visible.filter(
+        (a) => a.hiveStatus === "connected" && a.labelIds.includes(label.id),
+      ).length;
+    }
+    return counts;
+  }, [visible, labels]);
+
+  const runningVisibleCount = useMemo(() => visible.filter((a) => a.running).length, [visible]);
+
+  const selectLabelAccounts = (labelId: string) => {
+    const ids = visible.filter((a) => a.labelIds.includes(labelId)).map((a) => a.id);
+    setSelectedIds(ids);
+    if (ids.length > 0) {
+      setAnchorId(ids[0]);
+    }
+  };
+
+  const openHiveForLabel = (labelId: string) => {
+    const ids = visible
+      .filter((a) => a.hiveStatus === "connected" && a.labelIds.includes(labelId))
+      .map((a) => a.id);
+    if (!ids.length) {
+      show(`No hive-connected accounts with that label.`);
+      return;
+    }
+    setSelectedIds(ids);
+    setAnchorId(ids[0]);
+    setHiveOpen(true);
+  };
+
+  const selectRunning = () => {
+    const ids = visible.filter((a) => a.running).map((a) => a.id);
+    setSelectedIds(ids);
+    if (ids.length > 0) {
+      setAnchorId(ids[0]);
+    }
+  };
+
   const launchLabel = (labelId: string) => {
     const label = labels.find((row) => row.id === labelId);
     const ids = accounts
@@ -737,12 +778,17 @@ export default function App() {
           selectedIds={filterLabels}
           showInactive={showInactive}
           idleByLabel={idleByLabel}
+          connectedByLabel={connectedByLabel}
           launchBusy={busyId === "__many__" || queueBusy}
+          runningCount={runningVisibleCount}
           onToggleLabel={(id) =>
             setFilterLabels((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
           }
           onToggleInactive={() => setShowInactive((v) => !v)}
           onLaunchLabel={(id) => void launchLabel(id)}
+          onSelectLabel={selectLabelAccounts}
+          onHiveLabel={openHiveForLabel}
+          onSelectRunning={selectRunning}
           onNewLabel={() => setNewLabelFor([])}
           onUpdate={(id, patch) => void window.ram.updateLabel(id, patch)}
           onDelete={(id) => void window.ram.deleteLabel(id)}
@@ -861,6 +907,9 @@ export default function App() {
               </span>
               <button className="btn" onClick={() => setSelectedIds([])}>
                 Clear
+              </button>
+              <button className="btn" disabled={runningVisibleCount === 0} onClick={selectRunning}>
+                Select running
               </button>
               <button
                 className="btn primary"

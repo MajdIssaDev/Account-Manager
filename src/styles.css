@@ -907,6 +907,42 @@ textarea:focus {
   cursor: not-allowed;
 }
 
+.label-mini {
+  height: 22px;
+  padding: 0 6px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.label-mini:hover:not(:disabled) {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+.label-mini:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+
+.sidebar-bulk {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.sidebar-bulk .btn {
+  width: 100%;
+  font-size: 11px;
+  padding: 6px 8px;
+}
+
 .inactive-toggle {
   width: 100%;
   margin-top: auto;
@@ -1159,25 +1195,37 @@ textarea:focus {
   margin-right: 4px;
 }
 
-.hive-backdrop {
+.hive-shell {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
-  z-index: 90;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.hive-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 0;
+  pointer-events: auto;
 }
 
 .hive-drawer {
-  position: fixed;
-  top: 0;
+  position: absolute;
+  top: 42px;
   right: 0;
-  width: min(420px, 100vw);
-  height: 100vh;
-  background: var(--panel);
-  border-left: 1px solid var(--line);
-  z-index: 91;
+  bottom: 0;
+  width: min(440px, 100vw);
+  background: var(--modal-bg);
+  border-left: 1px solid var(--line-hot);
+  z-index: 1;
   display: flex;
   flex-direction: column;
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.25);
+  min-height: 0;
+  overflow: hidden;
+  box-shadow: -12px 0 32px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  isolation: isolate;
 }
 
 .hive-drawer-head {
@@ -1187,6 +1235,8 @@ textarea:focus {
   gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+  background: var(--modal-bg);
 }
 
 .hive-drawer-head h2 {
@@ -1196,10 +1246,14 @@ textarea:focus {
 
 .hive-tabs {
   display: flex;
+  flex-wrap: nowrap;
   gap: 4px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--line);
   overflow-x: auto;
+  flex-shrink: 0;
+  background: var(--modal-bg);
+  scrollbar-width: thin;
 }
 
 .hive-tab {
@@ -1212,6 +1266,7 @@ textarea:focus {
   font-weight: 650;
   cursor: pointer;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .hive-tab.on {
@@ -1222,8 +1277,10 @@ textarea:focus {
 
 .hive-tab-body {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 12px 14px;
+  background: var(--modal-bg);
 }
 
 .hive-actions {
@@ -1231,6 +1288,49 @@ textarea:focus {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 12px;
+}
+
+.hive-actions .btn {
+  flex: 0 0 auto;
+}
+
+.hive-perf {
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+.hive-perf-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.hive-perf-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+.hive-perf-cap {
+  min-width: 52px;
+  font-size: 12px;
+  font-weight: 650;
+  font-family: var(--font-mono);
+}
+
+.hive-perf-slider {
+  flex: 1;
+}
+
+.hive-perf-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .hive-toolbar {

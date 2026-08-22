@@ -8,10 +8,15 @@ export default function LabelSidebar(props: {
   selectedIds: string[];
   showInactive: boolean;
   idleByLabel: Record<string, number>;
+  connectedByLabel: Record<string, number>;
   launchBusy: boolean;
   onToggleLabel: (id: string) => void;
   onToggleInactive: () => void;
   onLaunchLabel: (id: string) => void;
+  onSelectLabel: (id: string) => void;
+  onHiveLabel: (id: string) => void;
+  onSelectRunning: () => void;
+  runningCount: number;
   onNewLabel: () => void;
   onUpdate: (id: string, patch: { name?: string; color?: string }) => void;
   onDelete: (id: string) => void;
@@ -39,6 +44,7 @@ export default function LabelSidebar(props: {
           const on = props.selectedIds.includes(label.id);
           const isEdit = editing === label.id;
           const idle = props.idleByLabel[label.id] || 0;
+          const connected = props.connectedByLabel[label.id] || 0;
           return (
             <div key={label.id} className={`label-row${on ? " on" : ""}`}>
               <button
@@ -88,6 +94,33 @@ export default function LabelSidebar(props: {
               )}
               <button
                 type="button"
+                className="label-mini"
+                title={`Select all ${label.name} in this view`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onSelectLabel(label.id);
+                }}
+              >
+                Sel
+              </button>
+              <button
+                type="button"
+                className="label-mini"
+                title={
+                  connected
+                    ? `Hive: ${connected} connected ${label.name}`
+                    : `No hive-connected ${label.name} accounts`
+                }
+                disabled={connected === 0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onHiveLabel(label.id);
+                }}
+              >
+                Hive
+              </button>
+              <button
+                type="button"
                 className="label-launch"
                 title={
                   idle
@@ -116,6 +149,11 @@ export default function LabelSidebar(props: {
             </div>
           );
         })}
+      </div>
+      <div className="sidebar-bulk">
+        <button type="button" className="btn" disabled={props.runningCount === 0} onClick={props.onSelectRunning}>
+          Select running ({props.runningCount})
+        </button>
       </div>
       <button
         type="button"
