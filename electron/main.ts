@@ -48,7 +48,7 @@ import {
   installUpdate,
   maybeAutoCheck,
 } from "./updater";
-import { startHiveWatcher, reloadHiveWatcher, livenessFor, sendCommand, sendMany, hiveStatusSnapshot, hiveWorkspacePath, ledgerSnapshot, setHivePanelOpen, isHivePanelOpen, setFarmingStackIntent, markAllHiveSessionsOffline, markHiveSessionsOffline } from "./hive";
+import { startHiveWatcher, reloadHiveWatcher, livenessFor, sendCommand, sendMany, hiveStatusSnapshot, hiveWorkspacePath, ledgerSnapshot, setHivePanelOpen, isHivePanelOpen, setFarmingStackIntent } from "./hive";
 import { debugMonitor, tryStartLocalDebug } from "./debugGate";
 import type {
   AccountPatch,
@@ -765,10 +765,6 @@ function registerIpc(): void {
     }
     await closePid(pid);
     forgetPid(id);
-    const row = getAccount(id);
-    if (row?.userId) {
-      markHiveSessionsOffline([row.userId]);
-    }
     emitAccounts();
     return ok();
   });
@@ -776,7 +772,6 @@ function registerIpc(): void {
   ipcMain.handle("accounts:closeAll", async (): Promise<IpcResult<{ closed: number }>> => {
     const closed = await closeAllRoblox();
     forgetAllPids();
-    markAllHiveSessionsOffline();
     emitAccounts();
     return ok({ closed });
   });
@@ -976,11 +971,7 @@ app.whenReady().then(async () => {
         const misses = (pidMisses.get(id) || 0) + 1;
         pidMisses.set(id, misses);
         if (misses >= PID_MISS_LIMIT) {
-          const row = getAccount(id);
           forgetPid(id);
-          if (row?.userId) {
-            markHiveSessionsOffline([row.userId]);
-          }
           dirty = true;
         }
       }

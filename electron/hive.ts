@@ -77,22 +77,41 @@ export function hiveWorkspacePath(settings?: AppSettings): string {
   const local = process.env.LOCALAPPDATA || "";
   const candidates = [
     explicit,
-    join(local, "Potassium", "workspace", "AO project"),
     join(local, "Potassium", "workspace"),
+    join(local, "Potassium", "workspace", "AO project"),
   ].filter(Boolean);
 
+  const resolved: string[] = [];
   for (const candidate of candidates) {
     if (!candidate) {
       continue;
     }
-    if (basename(candidate) === "CloudFarmHive" && existsSync(candidate)) {
-      return dirname(candidate);
-    }
-    if (existsSync(join(candidate, "CloudFarmHive"))) {
-      return candidate;
+    const root = basename(candidate) === "CloudFarmHive" ? dirname(candidate) : candidate;
+    if (!resolved.includes(root)) {
+      resolved.push(root);
     }
   }
-  return explicit || candidates[1] || candidates[0] || "";
+
+  let withHive = "";
+  for (const root of resolved) {
+    const hiveDir = join(root, "CloudFarmHive");
+    const sessionsDir = join(hiveDir, "sessions");
+    if (!existsSync(hiveDir)) {
+      continue;
+    }
+    if (!withHive) {
+      withHive = root;
+    }
+    try {
+      const names = readdirSync(sessionsDir).filter((name) => name.toLowerCase().endsWith(".json"));
+      if (names.length > 0) {
+        return root;
+      }
+    } catch {
+      /* no sessions yet */
+    }
+  }
+  return withHive || explicit || resolved[0] || "";
 }
 
 export function hiveRoot(settings?: AppSettings): string {
@@ -105,7 +124,22 @@ function ttlMs(settings?: AppSettings): number {
 }
 
 function offlineAfterMs(ttl: number): number {
-  return Math.max(ttl * 3, 15000);
+  return Math.max(ttl * 12, 60_000);
+}
+
+function parseTimeMs(value: unknown): number {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    return 0;
+  }
+  if (n < 1e11) {
+    return Math.floor(n * 1000);
+  }
+  return Math.floor(n);
+}
+
+function connectedUntilMs(ttl: number): number {
+  return Math.max(ttl * 6, 20_000);
 }
 
 function livenessFromHeartbeat(connected: boolean, alive: boolean, last: number, now: number, ttl: number): HiveLiveness {
@@ -113,10 +147,10 @@ function livenessFromHeartbeat(connected: boolean, alive: boolean, last: number,
     return "offline";
   }
   if (!last) {
-    return "offline";
+    return "connected";
   }
   const age = now - last;
-  if (age <= ttl) {
+  if (age <= connectedUntilMs(ttl)) {
     return "connected";
   }
   if (age <= offlineAfterMs(ttl)) {
@@ -133,16 +167,16 @@ function classify(raw: Record<string, unknown>, filePath: string, now: number, t
   const connected = raw.connected !== false;
   const alive = raw.alive !== false;
   const last =
-    Number(raw.lastHeartbeatAtMs) ||
-    (Number(raw.lastHeartbeatAt) > 1e12 ? Number(raw.lastHeartbeatAt) : Number(raw.lastHeartbeatAt) * 1000) ||
-    (Number(raw.updatedAt) > 1e12 ? Number(raw.updatedAt) : Number(raw.updatedAt) * 1000) ||
+    parseTimeMs(raw.lastHeartbeatAtMs) ||
+    parseTimeMs(raw.lastHeartbeatAt) ||
+    parseTimeMs(raw.updatedAt) ||
     0;
   const liveness = livenessFromHeartbeat(connected, alive, last, now, ttl);
   return {
     userId: Math.floor(userId),
     liveness,
-    connected: liveness !== "offline",
-    alive: liveness !== "offline",
+    connected,
+    alive,
     lastHeartbeatAt: last || null,
     sessionId: typeof raw.sessionId === "string" ? raw.sessionId : undefined,
     placeId: Number(raw.placeId) || undefined,
@@ -162,10 +196,6 @@ function sessionFingerprint(list: HiveSession[]): string {
     .join("|");
 }
 
-function sessionFieldsFingerprint(session: HiveSession): string {
-  return `${session.liveness}:${session.jobId || ""}:${session.serverVerdict || ""}:${session.placeId || ""}:${session.threatLevel || ""}:${session.bootGeneration || ""}`;
-}
-
 function readSessionFile(filePath: string, now: number, ttl: number): HiveSession | null {
   try {
     const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
@@ -182,13 +212,8 @@ function refreshSessionTtl(): boolean {
   for (const [userId, session] of sessions) {
     const last = session.lastHeartbeatAt || 0;
     const liveness = livenessFromHeartbeat(session.connected, session.alive !== false, last, now, ttl);
-    if (liveness !== session.liveness || (liveness === "offline" && (session.connected || session.alive))) {
-      sessions.set(userId, {
-        ...session,
-        liveness,
-        connected: liveness !== "offline",
-        alive: liveness !== "offline",
-      });
+    if (liveness !== session.liveness) {
+      sessions.set(userId, { ...session, liveness });
       changed = true;
     }
   }
@@ -230,34 +255,24 @@ function scanSessions(forceFull = false): HiveSession[] {
     } catch {
       continue;
     }
-    const cached = sessionFileStats.get(filePath);
-    if (!doFull && cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
-      continue;
-    }
     sessionFileStats.set(filePath, stat);
     const session = readSessionFile(filePath, now, ttl);
     if (session) {
-      const prev = sessions.get(session.userId);
       sessions.set(session.userId, session);
       sessionPathByUserId.set(session.userId, filePath);
-      if (prev && sessionFieldsFingerprint(prev) !== sessionFieldsFingerprint(session)) {
-        /* field diff handled in emit */
-      }
     }
   }
 
-  if (doFull) {
-    lastFullSessionScanAt = now;
-    for (const [path] of sessionFileStats) {
-      if (!seenPaths.has(path)) {
-        sessionFileStats.delete(path);
-      }
+  lastFullSessionScanAt = doFull ? now : lastFullSessionScanAt;
+  for (const [path] of sessionFileStats) {
+    if (!seenPaths.has(path)) {
+      sessionFileStats.delete(path);
     }
-    for (const [userId, path] of sessionPathByUserId) {
-      if (!seenPaths.has(path)) {
-        sessions.delete(userId);
-        sessionPathByUserId.delete(userId);
-      }
+  }
+  for (const [userId, path] of sessionPathByUserId) {
+    if (!seenPaths.has(path)) {
+      sessions.delete(userId);
+      sessionPathByUserId.delete(userId);
     }
   }
 
@@ -377,39 +392,6 @@ function attachWatcher(): void {
 
 export function listSessions(): HiveSession[] {
   return Array.from(sessions.values()).sort((a, b) => a.userId - b.userId);
-}
-
-export function markHiveSessionsOffline(userIds?: number[]): void {
-  const filter =
-    userIds && userIds.length > 0
-      ? new Set(userIds.map((id) => Math.floor(Number(id))).filter((id) => id > 0))
-      : null;
-  const deltas: { userId: number; hiveStatus: HiveLiveness }[] = [];
-  const patches: HiveSessionPatch[] = [];
-  for (const [userId, session] of sessions) {
-    if (filter && !filter.has(userId)) {
-      continue;
-    }
-    if (session.liveness === "offline" && session.connected === false && session.alive === false) {
-      continue;
-    }
-    sessions.set(userId, { ...session, liveness: "offline", connected: false, alive: false });
-    deltas.push({ userId, hiveStatus: "offline" });
-    patches.push({ userId, fields: { liveness: "offline" } });
-  }
-  if (deltas.length === 0) {
-    return;
-  }
-  lastFingerprint = sessionFingerprint(listSessions());
-  hooks?.onLivenessChange(deltas);
-  hooks?.onSessionPatch(patches);
-  if (hooks?.isHivePanelOpen() ?? hivePanelOpen) {
-    hooks?.onChange(listSessions());
-  }
-}
-
-export function markAllHiveSessionsOffline(): void {
-  markHiveSessionsOffline();
 }
 
 function latestReasonFromReports(reports: unknown): string | undefined {
@@ -611,7 +593,11 @@ export function getSession(userId: number): HiveSession | undefined {
 }
 
 export function livenessFor(userId: number): HiveLiveness {
-  return sessions.get(userId)?.liveness || "offline";
+  const id = Math.floor(Number(userId));
+  if (!Number.isFinite(id) || id <= 0) {
+    return "offline";
+  }
+  return sessions.get(id)?.liveness || "offline";
 }
 
 const SEA_PLACE_IDS = new Set([12604352060, 15449776494]);
@@ -988,8 +974,5 @@ export function reloadHiveWatcher(): void {
 }
 
 export function hiveStatusSnapshot(): HiveSession[] {
-  if (sessions.size === 0) {
-    scanSessions(true);
-  }
-  return listSessions();
+  return scanSessions(true);
 }

@@ -67,7 +67,17 @@ export default function App() {
   const [hiveButKind, setHiveButKind] = useState<"sell" | "eat" | null>(null);
 
   useEffect(() => {
-    void window.ram.listAccounts().then(setAccounts);
+    void window.ram.listAccounts().then((rows) => {
+      setAccounts(rows);
+      void window.ram.hiveStatus().then((sessions) => {
+        setAccounts((prev) =>
+          patchAccountsHiveStatus(
+            prev,
+            sessions.map((s) => ({ userId: s.userId, hiveStatus: s.liveness })),
+          ),
+        );
+      });
+    });
     void window.ram.getSettings().then((s) => {
       setSettings(s);
       applyTheme(s.themeId);
