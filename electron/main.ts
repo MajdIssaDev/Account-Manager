@@ -703,6 +703,9 @@ function registerIpc(): void {
       emitAccounts();
       return fail("That client is not running.");
     }
+    if (!(await isRobloxPlayerPid(pid))) {
+      return fail("That client process is not a Roblox player window.");
+    }
     try {
       await focusPid(pid);
       return ok();

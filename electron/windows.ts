@@ -27,18 +27,25 @@ public static class RamFocus {
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern int GetWindowTextLength(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
   [DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int pid);
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  public static string ReadTitle(IntPtr hWnd) {
+    int len = GetWindowTextLength(hWnd);
+    if (len <= 0) return "";
+    var sb = new System.Text.StringBuilder(len + 1);
+    GetWindowText(hWnd, sb, sb.Capacity);
+    return sb.ToString();
+  }
   public static IntPtr FindBest(int[] pids) {
     IntPtr best = IntPtr.Zero;
     long bestArea = -1;
+    IntPtr bestRoblox = IntPtr.Zero;
+    long bestRobloxArea = -1;
     EnumWindows((hWnd, l) => {
       uint pid;
       GetWindowThreadProcessId(hWnd, out pid);
@@ -48,29 +55,20 @@ public static class RamFocus {
       RECT r;
       if (!GetWindowRect(hWnd, out r)) return true;
       long area = Math.Max(0L, (long)(r.Right - r.Left) * (long)(r.Bottom - r.Top));
-      if (area < 200 * 200) return true;
-      int titled = GetWindowTextLength(hWnd);
-      if (titled <= 0 && area < bestArea) return true;
+      if (area < 320 * 240) return true;
+      string title = ReadTitle(hWnd);
+      bool roblox = title.IndexOf("Roblox", StringComparison.OrdinalIgnoreCase) >= 0;
+      if (roblox && area > bestRobloxArea) { bestRobloxArea = area; bestRoblox = hWnd; }
       if (area > bestArea) { bestArea = area; best = hWnd; }
       return true;
     }, IntPtr.Zero);
-    return best;
+    return bestRoblox != IntPtr.Zero ? bestRoblox : best;
   }
-  [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr extra);
   public static void Focus(IntPtr hWnd) {
     AllowSetForegroundWindow(-1);
-    if (IsIconic(hWnd)) ShowWindow(hWnd, 9); else ShowWindow(hWnd, 5);
-    BringWindowToTop(hWnd);
-    IntPtr fg = GetForegroundWindow();
-    uint fgPid;
-    uint fgThread = GetWindowThreadProcessId(fg, out fgPid);
-    uint cur = GetCurrentThreadId();
-    if (fgThread != 0 && fgThread != cur) AttachThreadInput(cur, fgThread, true);
-    // ALT tap helps Windows allow SetForegroundWindow from a background process.
-    keybd_event(0x12, 0, 0, UIntPtr.Zero);
-    keybd_event(0x12, 0, 2, UIntPtr.Zero);
+    if (IsIconic(hWnd)) ShowWindow(hWnd, 9);
+    SwitchToThisWindow(hWnd, true);
     SetForegroundWindow(hWnd);
-    if (fgThread != 0 && fgThread != cur) AttachThreadInput(cur, fgThread, false);
   }
 }
 "@

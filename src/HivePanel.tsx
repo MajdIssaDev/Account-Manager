@@ -12,7 +12,7 @@ import HiveBackgroundFishModal from "./HiveBackgroundFishModal";
 import HiveButModal from "./HiveButModal";
 import HiveCatalogSlider from "./HiveCatalogSlider";
 import HiveFanoutResults from "./HiveFanoutResults";
-import { applyFpsCap, loadFpsCapState, startPlaylistWithDedupe } from "./hiveCoordination";
+import { applyFpsCap, loadFpsCapState, startFarmingStackWithDedupe, startPlaylistWithDedupe } from "./hiveCoordination";
 import { useHiveStore } from "./hiveStore";
 import { useHiveTarget } from "./useHiveTarget";
 
@@ -414,7 +414,18 @@ export default function HivePanel(props: {
     }
   };
 
+  const runFarmingStack = async () => {
+    toastBatch(
+      "farming_stack",
+      await startFarmingStackWithDedupe(hive.connected, hive.sendMany, props.onToast),
+    );
+  };
+
   const runPreset = async (name: string) => {
+    if (name === "farming_stack") {
+      await runFarmingStack();
+      return;
+    }
     toastBatch(name, await hive.sendMany("preset.apply", { name }));
   };
 
