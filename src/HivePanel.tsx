@@ -2,14 +2,21 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
   AccountPublic,
+  FarmingStackConfig,
   HiveCatalogControl,
   HiveSendManyResult,
   HiveServerLedgerEntry,
   HiveSession,
 } from "../shared/types";
-import { HIVE_STARTABLE_JOBS } from "../shared/types";
+import {
+  DEFAULT_FARMING_STACK,
+  HIVE_STARTABLE_JOBS,
+  describeFarmingStack,
+  normalizeFarmingStack,
+} from "../shared/types";
 import HiveBackgroundFishModal from "./HiveBackgroundFishModal";
 import HiveButModal from "./HiveButModal";
+import HiveFarmStackModal from "./HiveFarmStackModal";
 import HiveCatalogSlider from "./HiveCatalogSlider";
 import HiveFanoutResults from "./HiveFanoutResults";
 import { applyFpsCap, loadFpsCapState, startFarmingStackWithDedupe, startPlaylistWithDedupe } from "./hiveCoordination";
@@ -395,6 +402,8 @@ export default function HivePanel(props: {
   const [tab, setTab] = useState<TabId>("overview");
   const [butKind, setButKind] = useState<"sell" | "eat" | null>(null);
   const [bgFishOpen, setBgFishOpen] = useState(false);
+  const [stackModalOpen, setStackModalOpen] = useState(false);
+  const [stackConfig, setStackConfig] = useState<FarmingStackConfig>(DEFAULT_FARMING_STACK);
   const { sessions, ledger } = useHiveStore();
 
   const hive = useHiveTarget(props.accounts, props.selectedIds);
@@ -406,6 +415,12 @@ export default function HivePanel(props: {
     return () => {
       void window.ram.setHivePanelOpen(false);
     };
+  }, []);
+
+  useEffect(() => {
+    void window.ram.getSettings().then((settings) => {
+      setStackConfig(normalizeFarmingStack(settings.farmingStack));
+    });
   }, []);
 
   const [stackBusy, setStackBusy] = useState(false);
@@ -506,6 +521,14 @@ export default function HivePanel(props: {
               >
                 {stackBusy ? "Farming stack…" : "Farming stack"}
               </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={hive.busy || stackBusy}
+                onClick={() => setStackModalOpen(true)}
+              >
+                Configure farm stack
+              </button>
               <button type="button" className="btn danger" disabled={hive.busy} onClick={() => void runPreset("stop_all")}>
                 Stop all
               </button>
@@ -522,6 +545,7 @@ export default function HivePanel(props: {
                 Status
               </button>
             </div>
+            <p className="hint hive-stack-meta">{describeFarmingStack(stackConfig)}</p>
             <PerformanceSection firstAccountId={firstAccountId} busy={hive.busy} sendMany={hive.sendMany} />
             <HiveFanoutResults batch={hive.lastBatch} accountNames={names} />
         </div>
@@ -608,6 +632,16 @@ export default function HivePanel(props: {
           onDone={(summary) => {
             props.onToast(summary);
             setBgFishOpen(false);
+          }}
+        />
+      ) : null}
+      {stackModalOpen ? (
+        <HiveFarmStackModal
+          onClose={() => setStackModalOpen(false)}
+          onSaved={(next) => {
+            setStackConfig(next);
+            setStackModalOpen(false);
+            props.onToast(`Farm stack saved — ${describeFarmingStack(next)}`);
           }}
         />
       ) : null}

@@ -1,4 +1,4 @@
-import type { AccountPublic, HiveSession } from "../shared/types";
+import { farmingStackHivePayload, normalizeFarmingStack, type AccountPublic, type HiveSession } from "../shared/types";
 import type { HiveFanoutBatch } from "./useHiveTarget";
 
 type SendMany = (
@@ -21,6 +21,7 @@ type AfterBootCommand = {
 type AssignUniqueOptions = {
   afterBoot?: AfterBootCommand;
   onHoppedReady?: (account: AccountPublic) => Promise<void>;
+  waitForLand?: boolean;
 };
 
 export function sessionsForConnected(
@@ -93,11 +94,16 @@ async function waitForAnyInSea(accounts: AccountPublic[], timeoutMs = 20000): Pr
   return snapshotInSea(accounts);
 }
 
-async function applyFarmingStack(account: AccountPublic): Promise<boolean> {
+async function farmingStackPayload(): Promise<Record<string, unknown>> {
+  const settings = await window.ram.getSettings();
+  return farmingStackHivePayload(normalizeFarmingStack(settings.farmingStack));
+}
+
+async function applyFarmingStack(account: AccountPublic, payload: Record<string, unknown>): Promise<boolean> {
   const res = await window.ram.hiveSend({
     accountId: account.id,
     op: "preset.apply",
-    payload: { name: "farming_stack" },
+    payload,
     timeoutMs: 25000,
   });
   return res.ok === true && res.data?.ok === true;
@@ -113,16 +119,24 @@ function isSoloInSea(account: AccountPublic, connected: AccountPublic[], session
     if (other.userId === account.userId) {
       return false;
     }
-    return sessions.find((s) => s.userId === other.userId)?.jobId?.trim() === jobId;
+    const session = sessions.find((s) => s.userId === other.userId);
+    if (!session || session.liveness !== "connected") {
+      return false;
+    }
+    return session.jobId?.trim() === jobId;
   });
 }
 
-async function applyFarmingStackWithRetry(account: AccountPublic, attempts = 8): Promise<boolean> {
+async function applyFarmingStackWithRetry(
+  account: AccountPublic,
+  payload: Record<string, unknown>,
+  attempts = 8,
+): Promise<boolean> {
   for (let i = 0; i < attempts; i++) {
     const sessions = await window.ram.hiveStatus();
     const mine = sessions.find((s) => s.userId === account.userId);
     if (mine?.placeId && SEA_PLACE_IDS.has(mine.placeId) && mine.liveness === "connected") {
-      const ok = await applyFarmingStack(account);
+      const ok = await applyFarmingStack(account, payload);
       if (ok) {
         return true;
       }
@@ -146,11 +160,12 @@ function allOccupiedJobIds(connected: AccountPublic[], sessions: HiveSession[]):
 async function browseJoinCandidates(
   browseAccountId: string,
   excludeJobIds: string[],
+  limit = 40,
 ): Promise<JoinCandidate[]> {
   const res = await window.ram.hiveSend({
     accountId: browseAccountId,
     op: "server.browse",
-    payload: { excludeJobIds, limit: 40 },
+    payload: { excludeJobIds, limit },
     timeoutMs: 30000,
   });
   const servers = res.data?.data?.servers;
@@ -186,7 +201,7 @@ async function waitForAccountUnique(
         return false;
       }
       const session = sessions.find((s) => s.userId === other.userId);
-      return session?.jobId?.trim() === myJob;
+      return session?.liveness === "connected" && session.jobId?.trim() === myJob;
     });
     if (!shared) {
       return true;
@@ -222,18 +237,36 @@ export async function assignUniqueServers(
   options: AssignUniqueOptions = {},
 ): Promise<{ assigned: number; hoppedAccountIds: Set<string> }> {
   const hopAccounts = accountsToHopForDedupe(connected, sessions);
-  const hoppedAccountIds = new Set<string>();
+  const hoppedAccountIds = new Set<string>(hopAccounts.map((account) => account.id));
   if (hopAccounts.length === 0) {
     return { assigned: 0, hoppedAccountIds };
   }
 
-  const browseAccountId = connected[0]?.id;
+  const hopIds = new Set(hopAccounts.map((account) => account.id));
+  const browseAccountId = connected.find((account) => !hopIds.has(account.id))?.id || connected[0]?.id;
   if (!browseAccountId) {
     return { assigned: 0, hoppedAccountIds };
   }
 
-  let occupied = allOccupiedJobIds(connected, sessions);
-  let assigned = 0;
+  const occupied = allOccupiedJobIds(connected, sessions);
+  const candidates = await browseJoinCandidates(
+    browseAccountId,
+    [...occupied],
+    Math.max(40, hopAccounts.length * 8),
+  );
+  const reserved = new Set(occupied);
+  const assignments: { account: AccountPublic; pick: JoinCandidate }[] = [];
+  const leftover: AccountPublic[] = [];
+  for (const account of hopAccounts) {
+    const pick = candidates.find((row) => !reserved.has(row.id));
+    if (pick) {
+      reserved.add(pick.id);
+      assignments.push({ account, pick });
+    } else {
+      leftover.push(account);
+    }
+  }
+
   const joinPayloadBase: Record<string, unknown> = {
     quiet: true,
     claim: true,
@@ -243,16 +276,8 @@ export async function assignUniqueServers(
     joinPayloadBase.afterBoot = options.afterBoot;
   }
 
-  for (const account of hopAccounts) {
-    hoppedAccountIds.add(account.id);
-    const excludeJobIds = [...occupied];
-    const candidates = await browseJoinCandidates(browseAccountId, excludeJobIds);
-    let joined = false;
-
-    for (const pick of candidates) {
-      if (occupied.has(pick.id)) {
-        continue;
-      }
+  const fireJoin = async (account: AccountPublic, pick?: JoinCandidate): Promise<boolean> => {
+    if (pick) {
       const res = await window.ram.hiveSend({
         accountId: account.id,
         op: "travel.join",
@@ -262,52 +287,53 @@ export async function assignUniqueServers(
           jobId: pick.id,
           seaName: pick.seaName,
         },
-        timeoutMs: 35000,
+        timeoutMs: 20000,
       });
       if (res.ok && res.data?.ok) {
-        occupied.add(pick.id);
-        joined = true;
-        assigned += 1;
-        break;
+        return true;
       }
-      excludeJobIds.push(pick.id);
-      occupied.add(pick.id);
     }
+    onToast(`Fallback hop for @${account.username}…`);
+    await window.ram.hiveSend({
+      accountId: account.id,
+      op: "travel.hop",
+      payload: {
+        quiet: true,
+        noStagger: true,
+        reason: "hive-dedupe-fallback",
+        excludeJobIds: [...reserved],
+        ...(options.afterBoot ? { afterBoot: options.afterBoot } : {}),
+      },
+      timeoutMs: 20000,
+    });
+    return true;
+  };
 
-    if (!joined) {
-      onToast(`Fallback hop for @${account.username}…`);
-      await window.ram.hiveSend({
-        accountId: account.id,
-        op: "travel.hop",
-        payload: {
-          quiet: true,
-          noStagger: true,
-          reason: "hive-dedupe-fallback",
-          ...(options.afterBoot ? { afterBoot: options.afterBoot } : {}),
-        },
-        timeoutMs: 35000,
-      });
-      assigned += 1;
+  const results = await Promise.all([
+    ...assignments.map(({ account, pick }) => fireJoin(account, pick)),
+    ...leftover.map((account) => fireJoin(account)),
+  ]);
+  const assigned = results.filter(Boolean).length;
+
+  if (options.waitForLand !== false) {
+    await Promise.all(
+      hopAccounts.map(async (account) => {
+        await waitForAccountUnique(account, connected, 45000);
+        if (options.onHoppedReady) {
+          await options.onHoppedReady(account);
+        } else if (options.afterBoot) {
+          await window.ram.hiveSend({
+            accountId: account.id,
+            op: options.afterBoot.op,
+            payload: options.afterBoot.payload || {},
+            timeoutMs: 25000,
+          });
+        }
+      }),
+    );
+    if (options.afterBoot && hoppedAccountIds.size > 0) {
+      onToast("Hopped clients finished server assignment.");
     }
-
-    await waitForAccountUnique(account, connected, 25000);
-    sessions = await window.ram.hiveStatus();
-    occupied = allOccupiedJobIds(connected, sessions);
-
-    if (options.onHoppedReady) {
-      await options.onHoppedReady(account);
-    } else if (options.afterBoot) {
-      await window.ram.hiveSend({
-        accountId: account.id,
-        op: options.afterBoot.op,
-        payload: options.afterBoot.payload || {},
-        timeoutMs: 25000,
-      });
-    }
-  }
-
-  if (options.afterBoot && hoppedAccountIds.size > 0) {
-    onToast("Hopped clients finished server assignment.");
   }
 
   return { assigned, hoppedAccountIds };
@@ -428,6 +454,8 @@ export async function startFarmingStackWithDedupe(
       return null;
     }
 
+    const payload = await farmingStackPayload();
+
     await window.ram.setFarmingStackIntent({
       userIds: connected.map((account) => account.userId),
       active: true,
@@ -441,7 +469,7 @@ export async function startFarmingStackWithDedupe(
         await Promise.all(
           ready.map(async (account) => {
             started.add(account.id);
-            const ok = await applyFarmingStackWithRetry(account);
+            const ok = await applyFarmingStackWithRetry(account, payload);
             results.push({ userId: account.userId, ok, error: ok ? undefined : "preset_failed" });
             if (ok) {
               onToast(`@${account.username} is farming.`);
@@ -454,29 +482,32 @@ export async function startFarmingStackWithDedupe(
 
     const hopAccounts = await startSolos();
     if (hopAccounts.length > 0) {
-      onToast(`Moving ${hopAccounts.length} client${hopAccounts.length === 1 ? "" : "s"} off shared servers…`);
+      onToast(
+        `Keeping one client on this server — moving ${hopAccounts.length} other${hopAccounts.length === 1 ? "" : "s"} in parallel…`,
+      );
       const sessions = await window.ram.hiveStatus();
-      await assignUniqueServers(inSea, sessions, onToast, {
-        afterBoot: { op: "preset.apply", payload: { name: "farming_stack" } },
-        onHoppedReady: async (account) => {
-          started.add(account.id);
-          const ok = await applyFarmingStackWithRetry(account);
-          results.push({ userId: account.userId, ok, error: ok ? undefined : "preset_failed" });
-          if (ok) {
-            onToast(`@${account.username} is solo — farming started.`);
-          }
-          await startSolos();
-        },
+      const hopPromise = assignUniqueServers(inSea, sessions, onToast, {
+        afterBoot: { op: "preset.apply", payload },
+        waitForLand: false,
       });
-    }
-
-    const deadline = Date.now() + 60000;
-    while (started.size < inSea.length && Date.now() < deadline) {
-      await startSolos();
-      if (started.size >= inSea.length) {
-        break;
+      const deadline = Date.now() + 90000;
+      while (started.size < inSea.length && Date.now() < deadline) {
+        await startSolos();
+        if (started.size >= inSea.length) {
+          break;
+        }
+        await sleep(1200);
       }
-      await sleep(2000);
+      await hopPromise;
+    } else {
+      const deadline = Date.now() + 20000;
+      while (started.size < inSea.length && Date.now() < deadline) {
+        await startSolos();
+        if (started.size >= inSea.length) {
+          break;
+        }
+        await sleep(1200);
+      }
     }
 
     return { dropped: 0, results };

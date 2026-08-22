@@ -163,6 +163,57 @@ export type HiveInventoryItem = {
   key?: string;
 };
 
+export const CHEST_FARM_SPEEDS = ["Slowest", "Slow", "Default", "Fast"] as const;
+export type ChestFarmSpeed = (typeof CHEST_FARM_SPEEDS)[number];
+
+export type FarmingStackConfig = {
+  speedPreset: ChestFarmSpeed;
+  fish: boolean;
+  passive: boolean;
+};
+
+export const DEFAULT_FARMING_STACK: FarmingStackConfig = {
+  speedPreset: "Default",
+  fish: true,
+  passive: true,
+};
+
+export function normalizeFarmingStack(raw?: Partial<FarmingStackConfig> | null): FarmingStackConfig {
+  const speed = raw?.speedPreset;
+  const ok = CHEST_FARM_SPEEDS.includes(speed as ChestFarmSpeed);
+  return {
+    speedPreset: ok ? (speed as ChestFarmSpeed) : DEFAULT_FARMING_STACK.speedPreset,
+    fish: raw?.fish !== false,
+    passive: raw?.passive !== false,
+  };
+}
+
+export function farmingStackHivePayload(cfg: FarmingStackConfig): Record<string, unknown> {
+  const stack = normalizeFarmingStack(cfg);
+  return {
+    name: "farming_stack",
+    speedPreset: stack.speedPreset,
+    fish: stack.fish,
+    passive: stack.passive,
+    chest: { speedPreset: stack.speedPreset },
+  };
+}
+
+export function describeFarmingStack(cfg: FarmingStackConfig): string {
+  const stack = normalizeFarmingStack(cfg);
+  const parts = [stack.speedPreset];
+  if (stack.fish) {
+    parts.push("fishing");
+  }
+  if (stack.passive) {
+    parts.push("passive");
+  }
+  if (!stack.fish && !stack.passive) {
+    parts.push("chest only");
+  }
+  return parts.join(" · ");
+}
+
 export type AppSettings = {
   robloxPlayerPath: string;
   attachOnLaunch: boolean;
@@ -178,6 +229,7 @@ export type AppSettings = {
   hiveWorkspacePath: string;
   hiveHeartbeatTtlMs: number;
   hiveRelaunchUi: boolean;
+  farmingStack: FarmingStackConfig;
 };
 
 export type LoginMode = "login" | "signup" | "quick";

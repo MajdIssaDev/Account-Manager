@@ -1417,6 +1417,14 @@ textarea:focus {
   color: var(--text);
 }
 
+.farm-speed-row {
+  grid-template-columns: 1fr 1fr;
+}
+
+.hive-stack-meta {
+  margin: -4px 0 12px;
+}
+
 .hive-catalog-row.disabled {
   opacity: 0.55;
 }

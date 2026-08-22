@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { app, safeStorage } from "electron";
 import type { AccountLabel, AccountPatch, AppSettings, ThemeId } from "../shared/types";
-import { DEFAULT_LABELS } from "../shared/types";
+import { DEFAULT_FARMING_STACK, DEFAULT_LABELS, normalizeFarmingStack } from "../shared/types";
 
 export type StoredAccount = {
   id: string;
@@ -39,6 +39,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   hiveWorkspacePath: "",
   hiveHeartbeatTtlMs: 5000,
   hiveRelaunchUi: false,
+  farmingStack: { ...DEFAULT_FARMING_STACK },
 };
 
 function dataDir(): string {
@@ -141,6 +142,7 @@ function normalizeSettings(raw: Partial<AppSettings> | undefined): AppSettings {
   const ttl = Number(merged.hiveHeartbeatTtlMs);
   merged.hiveHeartbeatTtlMs = Number.isFinite(ttl) ? Math.max(1000, Math.floor(ttl)) : 5000;
   merged.hiveRelaunchUi = Boolean(merged.hiveRelaunchUi);
+  merged.farmingStack = normalizeFarmingStack(merged.farmingStack);
   return merged;
 }
 

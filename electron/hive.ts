@@ -14,15 +14,18 @@ import { access, readFile, unlink } from "fs/promises";
 import { basename, dirname, join } from "path";
 import { randomUUID } from "crypto";
 import { debugMonitor } from "./debugGate";
-import type {
-  AppSettings,
-  HiveCommandResult,
-  HiveLiveness,
-  HiveSendManyResult,
-  HiveServerLedgerEntry,
-  HiveServerVerdict,
-  HiveSession,
-  HiveSessionPatch,
+import { getSettings } from "./store";
+import {
+  farmingStackHivePayload,
+  normalizeFarmingStack,
+  type AppSettings,
+  type HiveCommandResult,
+  type HiveLiveness,
+  type HiveSendManyResult,
+  type HiveServerLedgerEntry,
+  type HiveServerVerdict,
+  type HiveSession,
+  type HiveSessionPatch,
 } from "../shared/types";
 
 type HiveHooks = {
@@ -625,6 +628,10 @@ function loadFarmStack(): void {
 
 loadFarmStack();
 
+function farmingStackCommandPayload(): Record<string, unknown> {
+  return farmingStackHivePayload(normalizeFarmingStack(getSettings().farmingStack));
+}
+
 function pendingDir(): string {
   return join(hiveRoot(), "pending");
 }
@@ -637,7 +644,7 @@ function writeFarmPending(userId: number): void {
     JSON.stringify({
       v: 1,
       op: "preset.apply",
-      payload: { name: "farming_stack" },
+      payload: farmingStackCommandPayload(),
       at: Math.floor(Date.now() / 1000),
     }),
     "utf8",
@@ -771,7 +778,7 @@ async function resumeFarmStack(userId: number): Promise<void> {
     if (!current || current.liveness !== "connected" || !current.placeId || !SEA_PLACE_IDS.has(current.placeId)) {
       return;
     }
-    const result = await sendCommand(userId, "preset.apply", { name: "farming_stack" }, 25000);
+    const result = await sendCommand(userId, "preset.apply", farmingStackCommandPayload(), 25000);
     if (!result.ok) {
       writeFarmPending(userId);
     }
